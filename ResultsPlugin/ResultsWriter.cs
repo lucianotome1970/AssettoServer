@@ -140,10 +140,11 @@ public class ResultsWriter : BackgroundService
                 Sectors = sectors,
                 Cuts = args.Packet.Cuts,
                 BallastKG = (int)car.Ballast,
-                // The server does not track which compound a car is on, so
-                // this stays empty rather than guessing. Leaving the field out
-                // entirely would break readers that expect acServer's shape.
-                Tyre = "",
+                // The compound the car is on right now, which is what acServer
+                // records for the lap. It can be null before the first position
+                // update arrives, and an empty string is what readers already
+                // handle for a lap whose tyre is unknown.
+                Tyre = car.Status.CurrentTyreCompound ?? "",
                 Restrictor = car.Restrictor
             });
         }
@@ -230,8 +231,14 @@ public class ResultsWriter : BackgroundService
             File.WriteAllText(path,
                 JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true }));
 
+            // CONTA SO QUEM TEM GUID. A linha dizia "35 drivers" numa sessao
+            // que uma pessoa correu, porque comparava com "0" -- e as vagas
+            // vazias passaram a sair com guid VAZIO quando esse mesmo defeito
+            // foi corrigido no arquivo. O arquivo estava certo e o log mentia,
+            // que e a combinacao que faz alguem procurar o problema no lugar
+            // errado.
             Log.Information("ResultsPlugin: wrote {Path} with {Laps} laps and {Drivers} drivers",
-                path, laps.Count, results.Count(r => r.DriverGuid != "0"));
+                path, laps.Count, results.Count(r => !string.IsNullOrEmpty(r.DriverGuid)));
 
             Prune();
         }
