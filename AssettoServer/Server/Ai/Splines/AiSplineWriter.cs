@@ -16,7 +16,11 @@ public class AiSplineWriter
 
         file.Write(new AiSplineHeader
         {
-            Version = 1,
+            // FROM THE READER'S CONSTANT, never a literal. The writer stamping a
+            // number of its own means every version bump has two places to change,
+            // and forgetting the second one writes a cache the reader refuses -- in
+            // a loop, since it regenerates it and refuses it again.
+            Version = AiSpline.SupportedVersion,
             NumPoints = map.Points.Length,
             NumJunctions = map.Junctions.Count,
             NumKdTreePoints = treePoints.Length
