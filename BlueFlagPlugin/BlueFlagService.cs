@@ -20,10 +20,19 @@ public class BlueFlagService : BackgroundService
     private readonly EntryCarManager _entryCarManager;
     private readonly SessionManager _sessionManager;
 
-    /// <summary>Last spline reading per car, to work out who is moving how fast.</summary>
-    private readonly float[] _lastPosition;
-    private readonly float[] _rate;
-    private readonly bool[] _showing;
+    /// <summary>
+    /// Last spline reading per car, to work out who is moving how fast.
+    ///
+    /// SIZED ON FIRST USE, not in the constructor. Plugins are built while the
+    /// server is still starting and the entry list is still empty, so sizing
+    /// here gave arrays of one slot for a grid of thirty five -- and the first
+    /// tick after startup threw IndexOutOfRange, every tick, for the whole
+    /// session. The unit tests cover the geometry and would never have caught
+    /// it: there is no geometry in being built too early.
+    /// </summary>
+    private float[] _lastPosition = [];
+    private float[] _rate = [];
+    private bool[] _showing = [];
     private long _lastTick;
 
     public BlueFlagService(BlueFlagConfiguration configuration,
@@ -34,10 +43,15 @@ public class BlueFlagService : BackgroundService
         _entryCarManager = entryCarManager;
         _sessionManager = sessionManager;
 
-        var slots = Math.Max(1, _entryCarManager.EntryCars.Length);
-        _lastPosition = new float[slots];
-        _rate = new float[slots];
-        _showing = new bool[slots];
+    }
+
+    /// <summary>Grows the per-car state to match the grid, once it exists.</summary>
+    private void GarantirEspaco(int slots)
+    {
+        if (_lastPosition.Length >= slots) return;
+        Array.Resize(ref _lastPosition, slots);
+        Array.Resize(ref _rate, slots);
+        Array.Resize(ref _showing, slots);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -79,6 +93,8 @@ public class BlueFlagService : BackgroundService
         if (results == null) return;
 
         var cars = _entryCarManager.EntryCars;
+        GarantirEspaco(cars.Length);
+
         for (var i = 0; i < cars.Length; i++)
         {
             var position = cars[i].Status.NormalizedPosition;
