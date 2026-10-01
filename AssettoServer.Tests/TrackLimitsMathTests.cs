@@ -11,13 +11,22 @@ public class TrackLimitsMathTests
     [Test]
     public void SignedOffset_tells_left_from_right()
     {
-        // Circuits are not symmetrical: at Guaporé the median left side is
-        // 6.50 m and the right 6.25 m. Losing the sign means judging a car on
-        // the narrow side against the wide side's limit.
+        // THE SIGN COMES FROM THE TRACK, not from a convention.
+        //
+        // This test asserted the opposite, because the handedness the game
+        // renders with says it should: so it passed, and proved nothing. Then
+        // a driver ran off to the RIGHT at turn 2 of Guapore and the plugin
+        // called it left. The spline's forward vector does not follow that
+        // convention, and only going out there showed it.
+        //
+        // Circuits are not symmetrical - at Guapore the median left side is
+        // 6.50 m and the right 6.25 m - so a mirrored sign judges a car on the
+        // narrow side against the wide side's limit, with every number still
+        // looking plausible.
         Assert.That(TrackLimitsMath.SignedOffset(new Vector3(3, 0, 0), OnTheLine, Forward),
-            Is.EqualTo(3f).Within(0.001f));
-        Assert.That(TrackLimitsMath.SignedOffset(new Vector3(-3, 0, 0), OnTheLine, Forward),
             Is.EqualTo(-3f).Within(0.001f));
+        Assert.That(TrackLimitsMath.SignedOffset(new Vector3(-3, 0, 0), OnTheLine, Forward),
+            Is.EqualTo(3f).Within(0.001f));
     }
 
     [Test]
@@ -33,7 +42,7 @@ public class TrackLimitsMathTests
         var subindoMuito = new Vector3(0, 10, 1);
         var desvio = TrackLimitsMath.SignedOffset(new Vector3(3, 0, 0), OnTheLine, subindoMuito);
 
-        Assert.That(desvio, Is.EqualTo(3f).Within(0.001f));
+        Assert.That(Math.Abs(desvio), Is.EqualTo(3f).Within(0.001f));
     }
 
     [Test]

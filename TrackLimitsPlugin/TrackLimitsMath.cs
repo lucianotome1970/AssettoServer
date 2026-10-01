@@ -43,17 +43,21 @@ public static class TrackLimitsMath
 
         forward = Vector3.Normalize(forward);
 
-        // RIGHT IS up x forward, which is the left handed convention the game
-        // uses. Built the other way round - forward x up, the right handed one
-        // - every offset comes out mirrored, and the plugin judges a car on
-        // the narrow side of the circuit against the wide side's limit. The
-        // numbers all look reasonable, which is what makes it hard to spot.
+        // SETTLED ON TRACK, NOT BY REASONING.
         //
-        // WHICH SIDE THE FILE CALLS LEFT is a separate question, and one only
-        // the track answers: run off deliberately on a known side and read the
-        // logged distance. Until that is done, treat an asymmetric call with
-        // suspicion.
-        var right = new Vector3(forward.Z, 0, -forward.X);
+        // This was the other way round, because the left handed convention the
+        // game renders with says it should be. A driver then ran off to the
+        // RIGHT at turn 2 of Guapore and the plugin logged it as left: the
+        // spline's forward vector does not follow that convention, and the
+        // only way to know was to go and look.
+        //
+        // The test that covered this asserted the assumption, so it passed and
+        // proved nothing. It now encodes the measurement.
+        //
+        // Mirrored, this judges a car on the narrow side of the circuit
+        // against the wide side's limit - and every number still looks
+        // plausible, which is what makes it so hard to catch from a log.
+        var right = new Vector3(-forward.Z, 0, forward.X);
         return Vector3.Dot(toCar, right);
     }
 
