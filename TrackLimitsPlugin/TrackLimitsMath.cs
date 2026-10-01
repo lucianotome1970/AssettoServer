@@ -95,19 +95,31 @@ public static class TrackLimitsMath
     /// track, it is not a cut. Ever.
     /// </summary>
     /// <param name="secondsOutside">How long the car stayed beyond the edge.</param>
-    /// <param name="maxThrottle">The most throttle applied while out there, 0 to 1.</param>
+    /// <param name="secondsLifted">
+    /// How long, within that, the throttle was shut.
+    ///
+    /// THIS USED TO BE THE MOST THROTTLE APPLIED, and that was wrong in a way
+    /// only a real lap showed: nobody leaves the circuit already off throttle.
+    /// A driver runs wide with the pedal down and lifts a moment later, when
+    /// they realise - so the peak is always 100%, and a rule built on it
+    /// forgives nobody. Three deliberate excursions in a row came back at
+    /// "100 % throttle", one of them a lift.
+    /// </param>
     /// <param name="minimumSeconds">Shorter than this is a wheel brushing the edge.</param>
-    /// <param name="liftThreshold">
-    /// Throttle below this counts as lifting. Not zero: a wheel resting on the
-    /// pedal, or a throttle that never quite closes, would otherwise turn
-    /// every lift into a cut.
+    /// <param name="liftSeconds">
+    /// How long off throttle it takes to forgive. Lifting for a third of a
+    /// second at racing speed gives the time back; a single frame does not,
+    /// which is what stops this being free to game.
     /// </param>
     /// <param name="forgiveLifting">League rule: whether lifting forgives at all.</param>
-    public static bool CountsAsCut(float secondsOutside, float maxThrottle,
-        float minimumSeconds, float liftThreshold, bool forgiveLifting)
+    public static bool CountsAsCut(float secondsOutside, float secondsLifted,
+        float minimumSeconds, float liftSeconds, bool forgiveLifting)
     {
         if (secondsOutside < minimumSeconds) return false;
-        if (forgiveLifting && maxThrottle < liftThreshold) return false;
+        if (forgiveLifting && secondsLifted >= liftSeconds) return false;
         return true;
     }
+
+    /// <summary>Which side of the racing line, for a log a human reads.</summary>
+    public static string SideName(float signedOffset) => signedOffset < 0 ? "left" : "right";
 }

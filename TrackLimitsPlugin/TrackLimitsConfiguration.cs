@@ -28,6 +28,12 @@ public class TrackLimitsConfiguration
         + "closes would turn every lift into a cut")]
     public float LiftThrottleThreshold { get; init; } = 0.15f;
 
+    [YamlMember(Description =
+        "Seconds off throttle, while off track, that forgive the excursion. Nobody leaves "
+        + "the circuit already lifting - they lift a moment later - so what matters is how "
+        + "long the pedal stayed shut, not whether it was ever down")]
+    public float LiftSeconds { get; init; } = 0.3f;
+
     [YamlMember(Description = "Announce each cut in chat to the driver who made it")]
     public bool AnnounceInChat { get; init; } = true;
 

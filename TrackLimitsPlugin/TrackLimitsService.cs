@@ -31,7 +31,9 @@ public class TrackLimitsService : BackgroundService
         public bool Fora;
         public long DesdeMs;
         public float MaiorAcelerador;
+        public float SegundosSemAcelerador;
         public float MaiorDistancia;
+        public float DesvioNoPior;
         public int Cortes;
     }
 
@@ -121,16 +123,34 @@ public class TrackLimitsService : BackgroundService
                     estado.Fora = true;
                     estado.DesdeMs = agora;
                     estado.MaiorAcelerador = 0;
+                    estado.SegundosSemAcelerador = 0;
                     estado.MaiorDistancia = 0;
+                    estado.DesvioNoPior = 0;
                 }
 
-                // THE MOST throttle used out there, not the throttle right now.
-                // A driver who lifts only as the car rejoins did not give the
-                // time back, and sampling the instant would let that pass.
+                // HOW LONG THE PEDAL STAYED SHUT, which is what forgives.
+                //
+                // The peak throttle was here instead, and it is useless:
+                // nobody leaves the circuit already lifting, so the peak is
+                // 100% on every excursion including the ones where the driver
+                // did give the time back.
+                if (acelerador < _configuration.LiftThrottleThreshold)
+                {
+                    estado.SegundosSemAcelerador += _configuration.IntervalMilliseconds / 1000f;
+                }
+
                 estado.MaiorAcelerador = Math.Max(estado.MaiorAcelerador, acelerador);
-                estado.MaiorDistancia = Math.Max(estado.MaiorDistancia,
-                    TrackLimitsMath.HowFarOut(desvio, ponto.SideLeft, ponto.SideRight,
-                        _configuration.MarginMetres));
+
+                var distancia = TrackLimitsMath.HowFarOut(desvio, ponto.SideLeft, ponto.SideRight,
+                    _configuration.MarginMetres);
+                if (distancia > estado.MaiorDistancia)
+                {
+                    estado.MaiorDistancia = distancia;
+                    // GUARDA O DESVIO COM SINAL do pior instante: e dele que
+                    // sai o LADO no registro, e o lado e a unica pergunta que
+                    // a leitura do codigo nao responde -- so a pista.
+                    estado.DesvioNoPior = desvio;
+                }
                 continue;
             }
 
@@ -140,20 +160,28 @@ public class TrackLimitsService : BackgroundService
             estado.Fora = false;
             var segundos = (agora - estado.DesdeMs) / 1000f;
 
-            if (!TrackLimitsMath.CountsAsCut(segundos, estado.MaiorAcelerador,
-                    _configuration.MinimumSecondsOutside, _configuration.LiftThrottleThreshold,
+            var lado = TrackLimitsMath.SideName(estado.DesvioNoPior);
+
+            if (!TrackLimitsMath.CountsAsCut(segundos, estado.SegundosSemAcelerador,
+                    _configuration.MinimumSecondsOutside, _configuration.LiftSeconds,
                     _configuration.ForgiveLifting))
             {
-                Log.Debug("TrackLimitsPlugin: {Name} went {Metres:F1} m wide for {Seconds:F1} s "
-                    + "with {Throttle:P0} throttle - not counted",
-                    client.Name, estado.MaiorDistancia, segundos, estado.MaiorAcelerador);
+                // EM Information, E NAO Debug. O que NAO contou e metade da
+                // medicao: sem ver as saidas perdoadas, nao da para calibrar a
+                // margem nem saber se o perdao esta funcionando.
+                Log.Information("TrackLimitsPlugin: {Name} went {Metres:F1} m wide to the {Side} "
+                    + "for {Seconds:F1} s, {Lifted:F1} s off throttle - not counted",
+                    client.Name, estado.MaiorDistancia, lado, segundos,
+                    estado.SegundosSemAcelerador);
                 continue;
             }
 
             estado.Cortes++;
-            Log.Information("TrackLimitsPlugin: cut by {Name} - {Metres:F1} m wide for "
-                + "{Seconds:F1} s with {Throttle:P0} throttle (total {Total})",
-                client.Name, estado.MaiorDistancia, segundos, estado.MaiorAcelerador, estado.Cortes);
+            Log.Information("TrackLimitsPlugin: cut by {Name} - {Metres:F1} m wide to the {Side} "
+                + "for {Seconds:F1} s, peak {Throttle:P0} throttle, {Lifted:F1} s off it "
+                + "(total {Total})",
+                client.Name, estado.MaiorDistancia, lado, segundos, estado.MaiorAcelerador,
+                estado.SegundosSemAcelerador, estado.Cortes);
 
             client.SendPacket(new TrackLimitsPacket
             {

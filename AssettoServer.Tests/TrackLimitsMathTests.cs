@@ -63,31 +63,45 @@ public class TrackLimitsMathTests
     }
 
     [Test]
-    public void Lifting_off_forgives_the_excursion_every_time()
+    public void Lifting_for_long_enough_forgives_the_excursion()
     {
-        // The complaint about how ACC does this is that it sometimes counts
-        // the cut anyway. A driver who ran wide and lifted gave the time back,
-        // and a rule they cannot rely on is worse than no rule.
-        Assert.That(TrackLimitsMath.CountsAsCut(1.5f, 0.05f, 0.4f, 0.15f, forgiveLifting: true),
+        // Measured on track, and it is why this rule was rewritten: NOBODY
+        // leaves the circuit already off throttle. The driver runs wide with
+        // the pedal down and lifts a moment later, so a rule built on the peak
+        // throttle forgives no one - three deliberate excursions, one of them
+        // a lift, all came back "100 % throttle".
+        //
+        // Half a second shut, out of a two second excursion: forgiven.
+        Assert.That(TrackLimitsMath.CountsAsCut(2.0f, 0.5f, 0.4f, 0.3f, forgiveLifting: true),
             Is.False);
-        Assert.That(TrackLimitsMath.CountsAsCut(1.5f, 0.90f, 0.4f, 0.15f, forgiveLifting: true),
+        // Pedal down the whole way: a cut.
+        Assert.That(TrackLimitsMath.CountsAsCut(2.0f, 0.0f, 0.4f, 0.3f, forgiveLifting: true),
+            Is.True);
+    }
+
+    [Test]
+    public void A_blip_off_the_throttle_does_not_buy_forgiveness()
+    {
+        // One frame shut is not giving the time back, and a rule that took it
+        // would be free to game: lift for a fiftieth of a second, keep the lap.
+        Assert.That(TrackLimitsMath.CountsAsCut(2.0f, 0.05f, 0.4f, 0.3f, forgiveLifting: true),
             Is.True);
     }
 
     [Test]
     public void A_league_can_turn_the_forgiveness_off()
     {
-        Assert.That(TrackLimitsMath.CountsAsCut(1.5f, 0.05f, 0.4f, 0.15f, forgiveLifting: false),
+        Assert.That(TrackLimitsMath.CountsAsCut(2.0f, 1.5f, 0.4f, 0.3f, forgiveLifting: false),
             Is.True);
     }
 
     [Test]
-    public void The_lift_threshold_is_not_zero()
+    public void SideName_reads_the_sign()
     {
-        // A pedal that never quite closes, or a foot resting on it, would turn
-        // every lift into a cut if the test were "exactly zero throttle".
-        Assert.That(TrackLimitsMath.CountsAsCut(1.5f, 0.10f, 0.4f, 0.15f, forgiveLifting: true),
-            Is.False);
+        // The log is where the side question gets settled, so it has to say
+        // which side it decided on.
+        Assert.That(TrackLimitsMath.SideName(-2f), Is.EqualTo("left"));
+        Assert.That(TrackLimitsMath.SideName(2f), Is.EqualTo("right"));
     }
 
     [Test]
@@ -95,7 +109,7 @@ public class TrackLimitsMathTests
     {
         // Two wheels over the line for a tenth of a second at full throttle is
         // a car using the kerb, which is racing.
-        Assert.That(TrackLimitsMath.CountsAsCut(0.1f, 1.0f, 0.4f, 0.15f, forgiveLifting: true),
+        Assert.That(TrackLimitsMath.CountsAsCut(0.1f, 0f, 0.4f, 0.3f, forgiveLifting: true),
             Is.False);
     }
 }
