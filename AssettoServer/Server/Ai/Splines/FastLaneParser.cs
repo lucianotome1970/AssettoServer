@@ -159,8 +159,8 @@ public class FastLaneParser
             /*points[i].Brake*/ _ = reader.ReadSingle();
             /*points[i].ObsoleteLatG*/ _ = reader.ReadSingle();
             points[i].Radius = reader.ReadSingle();
-            /*points[i].SideLeft*/ _ = reader.ReadSingle();
-            /*points[i].SideRight*/ _ = reader.ReadSingle();
+            points[i].SideLeft = reader.ReadSingle();
+            points[i].SideRight = reader.ReadSingle();
             points[i].Camber = reader.ReadSingle() /* camber */ * reader.ReadSingle() /* direction, either 1 or -1 */;
             /*points[i].Normal*/ _ = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             points[i].Length = reader.ReadSingle();

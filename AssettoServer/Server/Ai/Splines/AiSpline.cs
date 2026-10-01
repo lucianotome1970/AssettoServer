@@ -14,7 +14,10 @@ namespace AssettoServer.Server.Ai.Splines;
 
 public class AiSpline : IDisposable
 {
-    public const int SupportedVersion = 1;
+    // 2: SplinePoint gained SideLeft/SideRight. The cache stores the struct
+    // raw, so a version 1 cache read with this layout would shift every
+    // field -- plausible, wrong widths, with nothing to flag it.
+    public const int SupportedVersion = 2;
     
     private readonly MemoryMappedFile _file;
     private readonly IMappedMemory _fileAccessor;

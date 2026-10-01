@@ -30,6 +30,15 @@ public class AiModule : Module
                 builder.RegisterType<DynamicTrafficDensity>().As<IHostedService>().SingleInstance();
             }
 
+        }
+
+        // THE SPLINE IS NOT ONLY FOR TRAFFIC.
+        //
+        // It is the only description of track geometry a server has without
+        // loading the track mesh, and plugins that judge where the circuit
+        // ends need it on servers that run no AI at all.
+        if (_configuration.Extra.EnableAi || _configuration.Extra.LoadAiSplineWithoutAi)
+        {
             builder.RegisterType<AiSplineWriter>().AsSelf();
             builder.RegisterType<FastLaneParser>().AsSelf();
             builder.RegisterType<AiSplineLocator>().AsSelf();

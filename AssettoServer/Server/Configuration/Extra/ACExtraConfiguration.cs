@@ -54,6 +54,12 @@ public class ACExtraConfiguration
     public double RainTrackGripReductionPercent { get; set; } = 0;
     [YamlMember(Description = "Enable AI traffic")]
     public bool EnableAi { get; init; } = false;
+
+    [YamlMember(Description =
+        "Load the AI spline even with AI traffic disabled. Plugins that need track "
+        + "geometry - track limits, flags, anything that has to know where the circuit "
+        + "ends - have no other source for it on a server")]
+    public bool LoadAiSplineWithoutAi { get; init; } = false;
     [YamlMember(Description = "Override the country shown in CM. Please do not use this unless the autodetected country is wrong", DefaultValuesHandling = DefaultValuesHandling.OmitNull)]
     public List<string>? GeoParamsCountryOverride { get; init; } = null;
     [YamlMember(Description = "List of plugins to enable")]
