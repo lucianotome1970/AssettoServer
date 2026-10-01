@@ -268,7 +268,7 @@ public class UdpPluginServer : BackgroundService
                 case UdpPluginProtocol.SetSessionInfo:
                 {
                     SetSessionInfo sessionInfo = packetReader.ReadPacket<SetSessionInfo>();
-                    if (sessionInfo.SessionIndex > 0 && sessionInfo.SessionIndex < _configuration.Sessions.Count)
+                    if (sessionInfo.SessionIndex >= 0 && sessionInfo.SessionIndex < _configuration.Sessions.Count)
                     {
                         SessionConfiguration session = _configuration.Sessions[sessionInfo.SessionIndex];
                         session.Name = sessionInfo.SessionName;
