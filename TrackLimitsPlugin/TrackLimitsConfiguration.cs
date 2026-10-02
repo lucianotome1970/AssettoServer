@@ -7,10 +7,13 @@ namespace TrackLimitsPlugin;
 public class TrackLimitsConfiguration
 {
     [YamlMember(Description =
-        "Metres past the track edge before a car counts as outside. The edge comes from "
-        + "the AI spline, not from the surfaces the game itself checks, so the two disagree "
-        + "slightly everywhere - this is where a league decides how strict to be")]
-    public float MarginMetres { get; init; } = 1.0f;
+        "Metres past the track edge before a car counts as outside. This measures the car's "
+        + "CENTRE, so it also encodes the wheel rule: the centre sits on the edge with two "
+        + "wheels out, and roughly half a track width beyond it with three. For a car with "
+        + "1.5 m between the wheels, 0.75 means 'three wheels out', which is what "
+        + "ALLOWED_TYRES_OUT=2 means in the game. Add to it to be lenient about the spline's "
+        + "edge differing from the surfaces the game checks")]
+    public float MarginMetres { get; init; } = 0.75f;
 
     [YamlMember(Description =
         "Seconds a car must stay outside before it counts. Below this it is a wheel "

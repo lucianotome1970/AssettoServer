@@ -36,6 +36,25 @@ public class FastLaneParser
         }
     }
 
+    /// <summary>
+    /// Reads one named spline file, outside the fast_lane naming.
+    ///
+    /// FromFiles only looks for fast_lane*.ai, because that is what traffic
+    /// drives. Every track also ships a pit_lane.ai, and a plugin that judges
+    /// where the circuit ends needs it for the opposite reason: a car in the
+    /// pit lane is tens of metres from the racing line and is not off track at
+    /// all. Without it, every pit stop reads as a long excursion and then a
+    /// second one, at full throttle, on the way out.
+    /// </summary>
+    /// <returns>The spline, or null when the file is not there.</returns>
+    public FastLane? FromSingleFile(string path)
+    {
+        if (!File.Exists(path)) return null;
+
+        using var fileStream = File.OpenRead(path);
+        return FromFile(fileStream, Path.GetFileName(path), 0);
+    }
+
     public MutableAiSpline FromFiles(string folder)
     {
         Dictionary<string, FastLane> splines = new();

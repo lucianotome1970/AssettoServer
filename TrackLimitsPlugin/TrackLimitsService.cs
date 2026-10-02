@@ -1,6 +1,7 @@
 using System.Numerics;
 using AssettoServer.Server;
 using AssettoServer.Server.Ai.Splines;
+using AssettoServer.Server.Configuration;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
@@ -26,6 +27,20 @@ public class TrackLimitsService : BackgroundService
     private readonly SessionManager _sessionManager;
     private readonly AiSpline? _spline;
 
+    /// <summary>
+    /// The pit lane, so that using it is not mistaken for leaving the circuit.
+    ///
+    /// MEASURED, NOT GUESSED: a driver serving a drive-through produced the
+    /// same pair on every lap -- a 23 second excursion 12 m from the racing
+    /// line while crawling through the pits, forgiven for lifting, and then a
+    /// 7 second one at 10 m with the throttle wide open on the way out, which
+    /// counted. Five cuts in four laps, all of them the pit lane.
+    ///
+    /// Null when the track has no pit_lane.ai; then pit passes count as
+    /// excursions and the log says so, which is better than pretending.
+    /// </summary>
+    private readonly SplinePoint[]? _pitLane;
+
     private sealed class Excursao
     {
         public bool Fora;
@@ -40,14 +55,52 @@ public class TrackLimitsService : BackgroundService
     private readonly Dictionary<byte, Excursao> _estado = new();
 
     public TrackLimitsService(TrackLimitsConfiguration configuration,
+        ACServerConfiguration serverConfiguration,
         EntryCarManager entryCarManager,
         SessionManager sessionManager,
-        AiSpline? spline = null)
+        AiSpline? spline = null,
+        FastLaneParser? parser = null)
     {
         _configuration = configuration;
         _entryCarManager = entryCarManager;
         _sessionManager = sessionManager;
         _spline = spline;
+
+        if (parser == null) return;
+        try
+        {
+            var pista = serverConfiguration.CSPTrackOptions.Track;
+            var caminho = Path.Join("content", $"tracks/{pista}/ai/pit_lane.ai");
+            _pitLane = parser.FromSingleFile(caminho)?.Points;
+        }
+        catch (Exception ex)
+        {
+            // Sem pit lane o plugin ainda funciona, so conta as passagens pelo
+            // box como saida -- entao isto avisa e segue, em vez de derrubar o
+            // servidor por causa de um arquivo de pista.
+            Log.Warning(ex, "TrackLimitsPlugin: could not read the pit lane spline");
+        }
+    }
+
+    /// <summary>
+    /// Is the car using the pit lane rather than leaving the circuit?
+    ///
+    /// Compares which is nearer: the racing line or the pit lane. Nothing else
+    /// separates the two reliably -- the server has no pit flag, and judging
+    /// by speed alone would forgive anyone who spins slowly off the circuit.
+    /// </summary>
+    private bool NoPitLane(System.Numerics.Vector3 posicao, float distanciaDaPista)
+    {
+        if (_pitLane == null) return false;
+
+        var maisPerto = float.MaxValue;
+        foreach (var ponto in _pitLane)
+        {
+            var d = System.Numerics.Vector3.DistanceSquared(ponto.Position, posicao);
+            if (d < maisPerto) maisPerto = d;
+        }
+
+        return maisPerto < distanciaDaPista * distanciaDaPista;
     }
 
     /// <summary>Cuts counted for a car in this session.</summary>
@@ -69,6 +122,21 @@ public class TrackLimitsService : BackgroundService
             + "lifting {Forgives}", _configuration.MarginMetres,
             _configuration.MinimumSecondsOutside,
             _configuration.ForgiveLifting ? "forgives" : "does not forgive");
+
+        // DIZ SE O PIT LANE CARREGOU, porque sem ele TODA passagem pelo box
+        // vira corte -- e foi assim que cinco paradas viraram cinco punicoes
+        // sem ninguem entender. Silencio aqui faria o proximo caso parecer
+        // defeito de geometria em vez de arquivo faltando.
+        if (_pitLane == null)
+        {
+            Log.Warning("TrackLimitsPlugin: no pit_lane.ai for this track, so pit lane passes "
+                + "will be counted as going off track");
+        }
+        else
+        {
+            Log.Information("TrackLimitsPlugin: pit lane loaded, {Points} points - passes "
+                + "through it do not count", _pitLane.Length);
+        }
 
         using var timer = new PeriodicTimer(
             TimeSpan.FromMilliseconds(Math.Max(50, _configuration.IntervalMilliseconds)));
@@ -112,6 +180,12 @@ public class TrackLimitsService : BackgroundService
 
             var fora = TrackLimitsMath.IsOutside(
                 desvio, ponto.SideLeft, ponto.SideRight, _configuration.MarginMetres);
+
+            // O PIT LANE NAO E FORA DE PISTA. So e consultado quando ja parece
+            // saida: a busca e linear sobre centenas de pontos, e rodar isso
+            // para 35 carros a cada quadro seria pagar caro por uma pergunta
+            // que quase sempre tem a mesma resposta.
+            if (fora && NoPitLane(car.Status.Position, Math.Abs(desvio))) fora = false;
 
             // ACCELERATOR AS A BYTE, 0 to 255 on the wire.
             var acelerador = car.Status.Gas / 255f;
