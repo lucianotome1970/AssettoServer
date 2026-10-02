@@ -2,6 +2,7 @@ using System.Numerics;
 using AssettoServer.Server;
 using AssettoServer.Server.Ai.Splines;
 using AssettoServer.Server.Configuration;
+using AssettoServer.Shared.Network.Packets.Shared;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
@@ -50,9 +51,32 @@ public class TrackLimitsService : BackgroundService
         public float MaiorDistancia;
         public float DesvioNoPior;
         public int Cortes;
+        /// <summary>
+        /// Já recebeu o drive-through nesta sessão.
+        ///
+        /// <para>
+        /// SEM ISTO, TODO CORTE DEPOIS DO LIMITE MANDA OUTRO. O piloto no quarto
+        /// corte estaria cumprindo o DT do terceiro, e o quarto renovaria o prazo
+        /// -- uma punição que não acaba, que é exatamente o sintoma que passamos
+        /// cinco noites perseguindo. Zera com a sessão, junto com a contagem.
+        /// </para>
+        /// </summary>
+        public bool DtAplicado;
     }
 
     private readonly Dictionary<byte, Excursao> _estado = new();
+
+    /// <summary>
+    /// O modo configurado, convertido na partida e nao a cada corte.
+    ///
+    /// <para>
+    /// NOME ERRADO NO YAML VIRA ERRO NA PARTIDA, e nao punicao silenciosamente
+    /// trocada no meio de uma prova. Um <c>TryParse</c> que cai no padrao
+    /// deixaria o gestor da liga achando que configurou uma coisa enquanto o
+    /// servidor aplica outra -- e ele so descobriria pelo piloto reclamando.
+    /// </para>
+    /// </summary>
+    private readonly CSPAdminPenaltyMode _modo;
 
     public TrackLimitsService(TrackLimitsConfiguration configuration,
         ACServerConfiguration serverConfiguration,
@@ -62,6 +86,15 @@ public class TrackLimitsService : BackgroundService
         FastLaneParser? parser = null)
     {
         _configuration = configuration;
+
+        // ERRO NA PARTIDA, e nao no meio da prova: ver `_modo`.
+        if (!Enum.TryParse<CSPAdminPenaltyMode>(configuration.PenaltyMode, true, out _modo)
+            || _modo == CSPAdminPenaltyMode.None)
+        {
+            throw new ArgumentException(
+                $"TrackLimitsPlugin: PenaltyMode '{configuration.PenaltyMode}' is not a penalty. "
+                + $"Use one of: {string.Join(", ", Enum.GetNames<CSPAdminPenaltyMode>())}.");
+        }
         _entryCarManager = entryCarManager;
         _sessionManager = sessionManager;
         _spline = spline;
@@ -267,6 +300,44 @@ public class TrackLimitsService : BackgroundService
             {
                 client.SendChatMessage(
                     $"Track limits: cut {estado.Cortes} ({estado.MaiorDistancia:F1} m wide).");
+            }
+
+            // A PUNICAO, DA MESMA CABECA QUE JULGOU O CORTE.
+            //
+            // O jogo nao tem punicao de corte em corrida -- nao conta o corte e
+            // portanto nao pune. A unica punicao nativa que existe e a de queima
+            // de largada, e quem a aplica e o CLIENTE. Entao a corrente inteira
+            // -- medir, julgar, punir -- fica aqui, onde nenhum cliente alcanca.
+            //
+            // UMA VEZ POR SESSAO, por `DtAplicado`: ver o porque lá.
+            if (_configuration.PenaltyAtCuts > 0
+                && estado.Cortes >= _configuration.PenaltyAtCuts
+                && !estado.DtAplicado)
+            {
+                estado.DtAplicado = true;
+                PunicaoDoServidor.Aplicar(client, _modo, _configuration.PenaltyArgument,
+                    $"{estado.Cortes} track limit cuts");
+
+                if (_configuration.AnnounceInChat)
+                {
+                    // DIZ O QUE VAI ACONTECER, em vez do nome do modo. Um piloto
+                    // lendo "TeleportToPits" nao sabe se deve ir ao box; e quem
+                    // le "drive-through" vai PARAR no box, e parar nao cumpre
+                    // drive-through -- medido, o piloto parou e tomou DSQ.
+                    client.SendChatMessage(_modo switch
+                    {
+                        CSPAdminPenaltyMode.TeleportToPits =>
+                            $"PENALTY: {_configuration.PenaltyArgument} s stopped in your box.",
+                        // "PARE", e nao "pit stop extra": medido -- entrar no pit
+                        // sem parar e cruzar a linha deu BANDEIRA PRETA 5,6 s
+                        // depois. A instrucao errada aqui desqualifica o piloto.
+                        CSPAdminPenaltyMode.MandatoryPits =>
+                            $"PENALTY: STOP in your box within {_configuration.PenaltyArgument} "
+                            + "laps. Passing through does NOT serve it - you will be black-flagged.",
+                        CSPAdminPenaltyMode.BlackFlag => "BLACK FLAG: you are out.",
+                        _ => $"PENALTY: {_modo} ({_configuration.PenaltyArgument})."
+                    });
+                }
             }
         }
     }

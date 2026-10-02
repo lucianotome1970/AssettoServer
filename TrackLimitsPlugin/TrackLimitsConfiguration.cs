@@ -40,6 +40,30 @@ public class TrackLimitsConfiguration
     [YamlMember(Description = "Announce each cut in chat to the driver who made it")]
     public bool AnnounceInChat { get; init; } = true;
 
+    [YamlMember(Description =
+        "Cuts in one session before the server penalises the driver, 0 to only count. "
+        + "Keep it equal to the limit the HUD shows (corte.limite), or the driver watches a "
+        + "counter that disagrees with the penalty. The league sets this per event")]
+    public int PenaltyAtCuts { get; init; } = 3;
+
+    [YamlMember(Description =
+        "Which penalty to apply. ALL FOUR MEASURED on track, 02/10/2026: "
+        + "MandatoryPits is served by STOPPING in the box within PenaltyArgument laps, and "
+        + "black-flags the driver who crosses the line without stopping. "
+        + "TeleportToPits teleports the car into its box and freezes it for PenaltyArgument "
+        + "SECONDS. SlowDown does nothing at all while RACE_GAS_PENALTY_DISABLED=1, which "
+        + "this league sets. BlackFlag disqualifies. "
+        + "THE NATIVE DRIVE-THROUGH IS NOT IN THIS LIST - the penalty a burned start gives, "
+        + "served by PASSING through the pit lane, cannot be reached from the server")]
+    public string PenaltyMode { get; init; } = "MandatoryPits";
+
+    [YamlMember(Description =
+        "The penalty's argument. UNITS DEPEND ON THE MODE, measured: LAPS to make the stop "
+        + "for MandatoryPits, SECONDS frozen for TeleportToPits. Reading it as laps "
+        + "everywhere is what the CSP SDK's naming invites, and it is wrong. "
+        + "Three laps for MandatoryPits matches what the game gives for a burned start")]
+    public int PenaltyArgument { get; init; } = 3;
+
     [YamlMember(Description = "How often to check, in milliseconds")]
     public int IntervalMilliseconds { get; init; } = 100;
 }
