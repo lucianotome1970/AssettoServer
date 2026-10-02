@@ -62,6 +62,20 @@ public class TrackLimitsService : BackgroundService
         /// </para>
         /// </summary>
         public bool DtAplicado;
+        /// <summary>
+        /// Quando o limite de pit foi mandado, ou nulo se ainda nao foi.
+        ///
+        /// <para>
+        /// NULO E NAO <c>long.MinValue</c>. Era o sentinela, e
+        /// <c>agora - long.MinValue</c> ESTOURA: em aritmetica de 64 bits o
+        /// resultado da negativo, a condicao de reenvio nunca e verdadeira e o
+        /// pacote nao sai uma vez sequer. Custou quatro versoes do HUD atras de
+        /// um canal de rede que estava intacto -- o servidor simplesmente nunca
+        /// falou. Um tipo que nao permite a conta errada vale mais que o cuidado
+        /// de lembrar dela.
+        /// </para>
+        /// </summary>
+        public long? LimiteEnviadoEm;
     }
 
     private readonly Dictionary<byte, Excursao> _estado = new();
@@ -77,6 +91,31 @@ public class TrackLimitsService : BackgroundService
     /// </para>
     /// </summary>
     private readonly CSPAdminPenaltyMode _modo;
+
+    /// <summary>
+    /// O limite de pit, lido do welcome na partida, ou nulo se nao der para ler.
+    /// Ver <see cref="LimiteDePit"/> sobre por que ele nao tem chave propria.
+    /// </summary>
+    private readonly int? _limiteDePit;
+
+    /// <summary>De quanto em quanto tempo o limite de pit e repetido.</summary>
+    public const long IntervaloDoLimiteMs = 10_000;
+
+    /// <summary>
+    /// Ja passou tempo de repetir o limite?
+    ///
+    /// <para>
+    /// SEPARADO E PUBLICO PARA TER TESTE. A versao anterior vivia numa
+    /// linha dentro do laco e nao mandava nunca, por estouro de 64 bits -- e o
+    /// sintoma, do lado do piloto, era identico ao de um canal de rede quebrado.
+    /// Uma conta que falha em silencio e exatamente o que merece teste.
+    /// </para>
+    /// </summary>
+    public static bool DeveReenviar(long? ultimoEnvio, long agora, long intervalo)
+    {
+        if (ultimoEnvio is not long quando) return true;
+        return agora - quando >= intervalo;
+    }
 
     public TrackLimitsService(TrackLimitsConfiguration configuration,
         ACServerConfiguration serverConfiguration,
@@ -98,6 +137,11 @@ public class TrackLimitsService : BackgroundService
         _entryCarManager = entryCarManager;
         _sessionManager = sessionManager;
         _spline = spline;
+
+        _limiteDePit = LimiteDePit.Ler(serverConfiguration.WelcomeMessage);
+        Log.Information("TrackLimitsPlugin: pit speed limit {Limit}",
+            _limiteDePit is int kmh ? $"{kmh} km/h, from the welcome message"
+                                    : "unknown - the HUD will warn without a number");
 
         if (parser == null) return;
         try
@@ -202,6 +246,38 @@ public class TrackLimitsService : BackgroundService
             {
                 estado = new Excursao();
                 _estado[car.SessionId] = estado;
+            }
+
+            // O LIMITE DE PIT, REPETIDO DE DEZ EM DEZ SEGUNDOS.
+            //
+            // UMA VEZ SO NAO FUNCIONA, e isso foi medido: o piloto conectou as
+            // 07:16:13 e o handshake do CSP so veio as 07:16:21. Mandar na
+            // primeira volta do laco entrega a mensagem OITO SEGUNDOS antes de
+            // existir Lua do outro lado para ouvi-la, e ela se perde em silencio
+            // -- o HUD mostrava o aviso sem numero, que e o unico modo de falha
+            // que este desenho tinha.
+            //
+            // REPETIR TAMBEM CURA O RECARREGAMENTO: o CSP recarrega um app Lua
+            // quando o arquivo muda, e o HUD recomeca sem saber o limite. Um
+            // pacote de quatro bytes a cada dez segundos por piloto nao se mede.
+            if (_limiteDePit is int kmhDoPit
+                && DeveReenviar(estado.LimiteEnviadoEm, agora, IntervaloDoLimiteMs))
+            {
+                var primeira = estado.LimiteEnviadoEm == null;
+                estado.LimiteEnviadoEm = agora;
+                client.SendPacket(new PitLimitPacket { SpeedKmh = kmhDoPit });
+
+                // A PRIMEIRA SO, e nao as repeticoes: isto existe para separar
+                // "o servidor nao mandou" de "a mensagem nao chegou", duas
+                // hipoteses que do lado do piloto sao identicas -- nada na tela.
+                // O HUD loga o recebimento no log do CSP; os dois logs juntos
+                // respondem, e sem eles cada tentativa custa um ciclo inteiro.
+                if (primeira)
+                {
+                    Log.Information("TrackLimitsPlugin: pit limit {Kmh} km/h sent to {Name} "
+                        + "({SessionId}), packet type {Type:X8}",
+                        kmhDoPit, client.Name, client.SessionId, PitLimitPacket.PacketType);
+                }
             }
 
             var (pointId, _) = _spline!.WorldToSpline(car.Status.Position);
