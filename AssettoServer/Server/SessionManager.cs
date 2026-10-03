@@ -473,26 +473,37 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
 
     public void SendCurrentSession(ACTcpClient? target = null)
     {
-        var packet = new CurrentSessionUpdate
-        {
-            CurrentSession = CurrentSession.Configuration,
-            Grid = CurrentSession.Grid,
-            TrackGrip = _weatherManager.Value.CurrentWeather.TrackGrip
-        };
-
+        // UM PACOTE POR DESTINATARIO. Este e o mais perigoso dos tres: a lista de ids do
+        // grid NAO TEM CONTADOR, e logo depois dela vem o StartTime. Um carro a mais do
+        // que o cliente tem na lista nao estoura laco nenhum -- desloca o StartTime, e a
+        // sessao inteira passa a comecar na hora errada para aquele piloto.
+        //
+        // O StartTime ja era por carro (cada um tem o seu TimeOffset), entao o pacote ja
+        // nao era compartilhado de verdade.
         if (target == null)
         {
             foreach (var car in _entryCarManager.EntryCars.Where(c => c.Client is { HasSentFirstUpdate: true }))
             {
-                packet.StartTime = CurrentSession.StartTimeMilliseconds - car.TimeOffset;
-                car.Client?.SendPacket(packet);
+                car.Client?.SendPacket(MontarSessao(car.SessionId,
+                    CurrentSession.StartTimeMilliseconds - car.TimeOffset));
             }
         }
         else
         {
-            target.SendPacket(packet);
+            target.SendPacket(MontarSessao(target.SessionId,
+                CurrentSession.StartTimeMilliseconds - target.EntryCar.TimeOffset));
         }
     }
+
+    private CurrentSessionUpdate MontarSessao(byte destinatario, long startTime) => new()
+    {
+        CurrentSession = CurrentSession.Configuration,
+        Grid = CurrentSession.Grid == null
+            ? null
+            : VagaDeTransmissao.SemEspectadores(CurrentSession.Grid, destinatario),
+        TrackGrip = _weatherManager.Value.CurrentWeather.TrackGrip,
+        StartTime = startTime
+    };
 
     private void SendSessionStart()
     {
@@ -514,13 +525,24 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
 
     private void SendSessionOver()
     {
+        // TAMBEM POR DESTINATARIO, e tambem sem contador no pacote: depois da lista de
+        // resultados vem um flag, que escorrega junto se a lista vier maior.
         if (CurrentSession.Results != null)
-            _entryCarManager.BroadcastPacket(new RaceOver
+        {
+            foreach (var car in _entryCarManager.EntryCars)
             {
-                IsRace = CurrentSession.Configuration.Type == SessionType.Race,
-                PickupMode = true,
-                Results = CurrentSession.Results
-            });
+                if (car.Client is not { HasSentFirstUpdate: true }) continue;
+                car.Client.SendPacket(new RaceOver
+                {
+                    IsRace = CurrentSession.Configuration.Type == SessionType.Race,
+                    PickupMode = true,
+                    Results = VagaDeTransmissao.SemEspectadores(
+                        CurrentSession.Results,
+                        id => _entryCarManager.EntryCars[id].IsSpectator,
+                        car.SessionId)
+                });
+            }
+        }
 
         CurrentSession.HasSentRaceOverPacket = true;
         CurrentSession.OverTimeMilliseconds = ServerTimeMilliseconds;

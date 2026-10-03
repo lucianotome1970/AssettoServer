@@ -208,7 +208,11 @@ public class ACTcpClient : IClient
     {
         UdpServer = udpServer;
         Logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            // VERBOSE, E NAO DEBUG -- pelo mesmo motivo de EntryCar: este logger so
+            // repassa para o Log.Logger, que ja tem o nivel da linha de comando. Com
+            // Debug aqui ele PRE-FILTRAVA, e o "Sending {PacketName}" que o upstream
+            // escreve em Verbose nunca saia, nem com --verbose.
+            .MinimumLevel.Verbose()
             .Enrich.With(new ACTcpClientLogEventEnricher(this))
             .WriteTo.Logger(Log.Logger)
             .CreateLogger();
@@ -323,7 +327,12 @@ public class ACTcpClient : IClient
                     foreach (var inner in batched.Packets)
                     {
                         var writer = new PacketWriter(tempStream, tempBuffer);
-                        writer.WritePacket(inner);
+                        var bytes = writer.WritePacket(inner);
+                        // O TAMANHO, E NAO SO O NOME. Quando o cliente morre dizendo
+                        // "data read out of range: 285 size 284", o numero e a unica
+                        // pista que existe -- sem ele, achar qual dos vinte pacotes
+                        // tinha 284 bytes e adivinhacao. So sai com --verbose.
+                        Logger.Verbose("  lote: {PacketName}, {Bytes} bytes", inner.GetType().Name, bytes);
                         await writer.SendAsync(DisconnectTokenSource.Token);
                     }
 
@@ -332,7 +341,8 @@ public class ACTcpClient : IClient
                 else
                 {
                     var writer = new PacketWriter(TcpStream, TcpSendBuffer);
-                    writer.WritePacket(packet);
+                    var bytes = writer.WritePacket(packet);
+                    Logger.Verbose("  {PacketName}, {Bytes} bytes", packet.GetType().Name, bytes);
                     await writer.SendAsync(DisconnectTokenSource.Token);
                 }
             }
@@ -630,6 +640,14 @@ public class ACTcpClient : IClient
         {
             EntryCar.TargetCar = _entryCarManager.EntryCars[spectatePacket.SessionId];
         }
+
+        // QUEM ESTA ASSISTINDO QUEM, E EM QUE CAMERA. O servidor ja usava isto -- e por
+        // TargetCar que a bolha de rede deixa de seguir o proprio carro e passa a seguir
+        // o carro assistido --, mas nunca registrava nada. Sem isto, "apertei F3" nao e
+        // medicao: nao da para distinguir a camera mudando no cliente de o servidor ter
+        // sido avisado. So sai com --verbose.
+        Logger.Verbose("assistindo: carro {Alvo}, camera {Camera}",
+            EntryCar.TargetCar?.SessionId.ToString() ?? "nenhum", spectatePacket.CameraMode);
     }
 
     private void OnChecksum(PacketReader reader)
@@ -805,6 +823,7 @@ public class ACTcpClient : IClient
             EntryCarsCount = carsInPage.Count,
             EntryCars = carsInPage,
             CarResults = _sessionManager.CurrentSession.Results ?? new Dictionary<byte, EntryCarResult>(),
+            ViewerSessionId = SessionId,
         };
 
         CarListResponseSending?.Invoke(this, new CarListResponseSendingEventArgs(carListResponse));
@@ -834,9 +853,19 @@ public class ACTcpClient : IClient
         _configuration.Server.DynamicTrack.TotalLapCount++;
         if (_sessionManager.OnLapCompleted(this, lapPacket))
         {
-            LapCompletedOutgoing packet = CreateLapCompletedPacket(SessionId, lapPacket.LapTime, lapPacket.Cuts);
-            _entryCarManager.BroadcastPacket(packet);
-            LapCompleted?.Invoke(this, new LapCompletedEventArgs(packet));
+            // UM PACOTE POR DESTINATARIO. A lista tem que bater com a lista DAQUELE
+            // cliente, e a de quem ocupa uma vaga de transmissao e diferente da dos
+            // outros -- ele enxerga o proprio carro, ninguem mais enxerga.
+            foreach (var destino in _entryCarManager.EntryCars)
+            {
+                if (destino.Client is not { HasSentFirstUpdate: true }) continue;
+                destino.Client.SendPacket(
+                    CreateLapCompletedPacket(SessionId, lapPacket.LapTime, lapPacket.Cuts, destino.SessionId));
+            }
+
+            // Os plugins recebem a volta INTEIRA: eles nao falam o protocolo do jogo.
+            LapCompleted?.Invoke(this, new LapCompletedEventArgs(
+                CreateLapCompletedPacket(SessionId, lapPacket.LapTime, lapPacket.Cuts)));
         }
     }
 
@@ -856,7 +885,19 @@ public class ACTcpClient : IClient
     {
         try
         {
-            var connectedCars = _entryCarManager.EntryCars.Where(c => c.Client != null || c.AiControlled).ToList();
+            // SEM AS VAGAS DE TRANSMISSAO, MENOS A PROPRIA. Esta lista alimenta tres
+            // pacotes -- DriverInfoUpdate, MandatoryPitUpdate e TyreCompoundUpdate --, todos
+            // carregando um session id. Mandar o id de um carro que o cliente ja tirou da
+            // lista dele e pedir uma busca que nao acha nada.
+            //
+            // A EXCECAO E DELIBERADA E E O PONTO EM ABERTO: quem esta NA vaga de transmissao
+            // continua recebendo o proprio carro, porque um cliente sem carro nenhum nao e um
+            // estado que o AC saiba ocupar. Se o teste em pista mostrar que ele tambem se
+            // descarta, e aqui que se mexe.
+            var connectedCars = _entryCarManager.EntryCars
+                .Where(c => c.Client != null || c.AiControlled)
+                .Where(c => !c.IsSpectator || c == EntryCar)
+                .ToList();
 
             SendPacket(new WelcomeMessage { Message = await _cspServerExtraOptions.GenerateWelcomeMessageAsync(this) });
 
@@ -921,7 +962,23 @@ public class ACTcpClient : IClient
                 });
             }
 
-            _entryCarManager.BroadcastPacket(CreateLapCompletedPacket(0xFF, 0, 0));
+            // A CLASSIFICACAO QUE TODO MUNDO RECEBE QUANDO ALGUEM ENTRA. Sessao 0xFF e
+            // volta zero: nao e uma volta de verdade, e um "redesenhe a tabela".
+            //
+            // ERA UM BROADCAST SO, E FOI ELE QUE MATOU A VAGA DE TRANSMISSAO. Quem entrava
+            // na vaga recebia a lista dos OUTROS -- 34 carros, 284 bytes -- e o cliente,
+            // que tinha 35 na lista dele, lia um registro alem do fim:
+            //
+            //     ON REMOTE LAP COMPLETED BY SES ID:255
+            //     ERROR: UDPPacket data read out of range: 285 size 284
+            //
+            // Tambem por destinatario, entao. Foi o unico dos cinco envios que escapou da
+            // primeira varredura, porque nao nasce de ninguem completar uma volta.
+            foreach (var destino in _entryCarManager.EntryCars)
+            {
+                if (destino.Client is not { HasSentFirstUpdate: true }) continue;
+                destino.Client.SendPacket(CreateLapCompletedPacket(0xFF, 0, 0, destino.SessionId));
+            }
             FirstUpdateSent?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
@@ -932,13 +989,18 @@ public class ACTcpClient : IClient
 
     private void KickForFailedChecksum() => _ = _entryCarManager.KickAsync(this, KickReason.ChecksumFailed, null, null, $"{Name} failed the checksum check and has been kicked.");
 
-    private LapCompletedOutgoing CreateLapCompletedPacket(byte sessionId, uint lapTime, int cuts)
+    private LapCompletedOutgoing CreateLapCompletedPacket(byte sessionId, uint lapTime, int cuts, byte? destinatario = null)
     {
         // TODO: double check and rewrite this
         if (_sessionManager.CurrentSession.Results == null)
             throw new ArgumentNullException(nameof(_sessionManager.CurrentSession.Results));
 
-        var laps = _sessionManager.CurrentSession.Results
+        // SEM O ESPECTADOR. Este pacote tem contador de tamanho, ao contrario dos outros
+        // dois, e foi nele que o cliente estourou quando a lista veio com um carro a mais
+        // do que ele tinha.
+        var laps = VagaDeTransmissao
+            .SemEspectadores(_sessionManager.CurrentSession.Results,
+                             id => _entryCarManager.EntryCars[id].IsSpectator, destinatario)
             .OrderBy(result => string.IsNullOrEmpty(result.Value.Name))
             .ThenBy(result => result.Value.Name)
             .Select(result => new LapCompletedOutgoing.CompletedLap

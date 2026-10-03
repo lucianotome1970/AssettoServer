@@ -249,6 +249,10 @@ public class EntryCarManager
 
             var car = _entryCarFactory(entry.Model, entry.Skin, (byte)i);
             car.SpectatorMode = entry.SpectatorMode;
+            // THE BROADCAST SLOT. The client honours this bit and drops the car from its
+            // own list, so everything that enumerates cars on the wire has to agree - see
+            // VagaDeTransmissao for what that costs and what it already cost us.
+            car.IsSpectator = entry.SpectatorMode != 0;
             car.Ballast = entry.Ballast;
             car.Restrictor = entry.Restrictor;
             car.FixedSetup = entry.FixedSetup;

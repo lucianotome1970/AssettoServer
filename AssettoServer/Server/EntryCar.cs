@@ -104,7 +104,12 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
         LastSeenAiSpawn = new byte[entryCarManager.EntryCars.Length];
         
         Logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
+            // VERBOSE, E NAO DEBUG. Este logger so repassa para o Log.Logger, que ja tem o
+            // nivel certo -- com Debug aqui ele PRE-FILTRAVA, e tudo que o servidor
+            // registrava por carro em Verbose (inclusive o "Sending {PacketName}" que o
+            // upstream escreve) sumia mesmo rodando com --verbose. Quem decide o nivel
+            // continua sendo a linha de comando.
+            .MinimumLevel.Verbose()
             .Enrich.With(new EntryCarLogEventEnricher(this))
             .WriteTo.Logger(Log.Logger)
             .CreateLogger();
@@ -141,8 +146,11 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
     internal void Reset()
     {
         ResetInvoked?.Invoke(this, EventArgs.Empty);
-        IsSpectator = false;
-        SpectatorMode = 0;
+        // IsSpectator AND SpectatorMode ARE NOT CLEARED. They come from the entry list,
+        // like Ballast and Restrictor, and a slot does not stop being a broadcast slot
+        // when its driver leaves. This Reset also runs when a client TAKES the slot -
+        // EntryCarManager.TrySecureSlot calls it right before setting Client - so clearing
+        // them here used to wipe the flag before the car list was ever sent.
         LastActiveTime = 0;
         HasUpdateToSend = false;
         TimeOffset = 0;
@@ -219,6 +227,19 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
 
     public bool GetPositionUpdateForCar(EntryCar toCar, out PositionUpdateOut positionUpdateOut)
     {
+        // UMA VAGA DE TRANSMISSAO NAO ANDA PARA NINGUEM. Os outros clientes nem tem este
+        // carro na lista deles -- mandar posicao de um carro que o destinatario desconhece
+        // e pedir uma busca que nao acha nada, pelo canal de maior frequencia que existe.
+        //
+        // O efeito colateral e desejado: quem ocupa a vaga e invisivel na pista. Ele ate
+        // consegue ligar e andar, mas ninguem o ve e ninguem bate nele -- por isso o carro
+        // da transmissao fica parado no box.
+        if (IsSpectator)
+        {
+            positionUpdateOut = default;
+            return false;
+        }
+
         CarStatus targetCarStatus;
         var toTargetCar = toCar.TargetCar;
         if (toTargetCar != null)
