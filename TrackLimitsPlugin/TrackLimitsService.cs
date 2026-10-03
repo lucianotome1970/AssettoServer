@@ -272,11 +272,26 @@ public class TrackLimitsService : BackgroundService
                 // hipoteses que do lado do piloto sao identicas -- nada na tela.
                 // O HUD loga o recebimento no log do CSP; os dois logs juntos
                 // respondem, e sem eles cada tentativa custa um ciclo inteiro.
+                // REPETE A PUNICAO ENQUANTO ELA ESTIVER DE PE no nosso lado.
+                //
+                // O servidor nao sabe quando o piloto cumpriu -- quem limpa e o
+                // cliente --, mas repetir e inofensivo: o HUD so usa o modo
+                // enquanto HA punicao ativa nos campos dele. E cura a mensagem
+                // perdida, que aqui nao custa um aviso errado e sim uma
+                // desqualificacao.
+                if (estado.DtAplicado)
+                {
+                    client.SendPacket(new PenaltyPacket
+                    {
+                        Mode = (byte)_modo,
+                        Argument = _configuration.PenaltyArgument
+                    });
+                }
+
                 if (primeira)
                 {
                     Log.Information("TrackLimitsPlugin: pit limit {Kmh} km/h sent to {Name} "
-                        + "({SessionId}), packet type {Type:X8}",
-                        kmhDoPit, client.Name, client.SessionId, PitLimitPacket.PacketType);
+                        + "({SessionId})", kmhDoPit, client.Name, client.SessionId);
                 }
             }
 
@@ -393,6 +408,15 @@ public class TrackLimitsService : BackgroundService
                 estado.DtAplicado = true;
                 PunicaoDoServidor.Aplicar(client, _modo, _configuration.PenaltyArgument,
                     $"{estado.Cortes} track limit cuts");
+
+                // E O HUD PRECISA SABER QUAL, senao ele instrui errado -- ver
+                // `PenaltyPacket`. Mandado aqui E repetido no tique do limite,
+                // porque uma mensagem perdida vira instrucao errada na tela.
+                client.SendPacket(new PenaltyPacket
+                {
+                    Mode = (byte)_modo,
+                    Argument = _configuration.PenaltyArgument
+                });
 
                 if (_configuration.AnnounceInChat)
                 {
