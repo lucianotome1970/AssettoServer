@@ -423,7 +423,6 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
 
         SessionChanged?.Invoke(this, new SessionChangedEventArgs(previousSession, CurrentSession, invertedCount));
         SendCurrentSession();
-        DevolverEspectadoresAoBox();
 
         Log.Information("Switching session to id {Id}", sessionId);
     }
@@ -481,49 +480,6 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
         return true;
     }
 
-    /// <summary>
-    /// Devolve ao box, alguns segundos depois da troca de sessão, quem ocupa uma
-    /// vaga de transmissão.
-    /// </summary>
-    /// <remarks>
-    /// TIRAR DO GRID NÃO BASTOU. O AC1 não tem noção de espectador no cliente:
-    /// quem posiciona o carro na largada é o jogo, e ele põe o próprio carro no
-    /// grid esteja ou não na lista que o servidor mandou. Medido na pista — com
-    /// o filtro já no <c>CurrentSession.Grid</c>, o carro saiu do box assim
-    /// mesmo.
-    ///
-    /// O MECANISMO É O MESMO DO COMANDO <c>/pit</c> de admin: reenviar a sessão
-    /// atual a um cliente o devolve ao box. Aqui ele é aplicado sozinho a quem
-    /// ocupa a vaga.
-    ///
-    /// O ATRASO É O PONTO. Junto com a troca de sessão o reenvio chega ANTES de
-    /// o cliente se posicionar, e não adianta: ele se posiciona depois. Passados
-    /// alguns segundos, o carro já está no grid e o reenvio o tira de lá.
-    ///
-    /// NÃO BLOQUEIA a troca de sessão: roda solto, e uma falha aqui não pode
-    /// derrubar a largada de todo mundo por causa de um carro que não corre.
-    /// </remarks>
-    private void DevolverEspectadoresAoBox()
-    {
-        foreach (var carro in _entryCarManager.EntryCars)
-        {
-            if (!carro.IsSpectator || carro.Client == null) continue;
-            var cliente = carro.Client;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(5));
-                    if (cliente.IsConnected) SendCurrentSession(cliente);
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Falha ao devolver a vaga de transmissao ao box");
-                }
-            });
-        }
-    }
-
     public void SendCurrentSession(ACTcpClient? target = null)
     {
         // UM PACOTE POR DESTINATARIO. Este e o mais perigoso dos tres: a lista de ids do
@@ -563,7 +519,33 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
         if (ServerTimeMilliseconds >= CurrentSession.StartTimeMilliseconds + 5000
             && ServerTimeMilliseconds - CurrentSession.LastRaceStartUpdateMilliseconds <= 1000) return;
 
-        foreach (var car in _entryCarManager.EntryCars.Where(c => c.Client is { HasSentFirstUpdate: true }))
+        // A VAGA DE TRANSMISSAO NAO RECEBE RaceStart.
+        //
+        // É ELE QUE INSCREVE O CLIENTE NA CORRIDA: sem ele, o carro da
+        // transmissão não entra na tabela de tempos do próprio AC. É o efeito
+        // que se quer -- quem ocupa a vaga não larga, não cronometra volta e
+        // assiste pelas câmeras, e já é invisível para os outros 34 pilotos
+        // porque o servidor o filtra de todas as listas que vão para eles.
+        //
+        // NÃO É PARA TIRAR O CARRO DO GRID -- isso não tem solução do lado do
+        // servidor, e três tentativas em 04/10/2026 provaram:
+        //
+        //   * `CurrentSessionUpdate` reenviado durante a contagem REPOSICIONA
+        //     o carro na própria vaga do grid (uma "balançada"), não no box;
+        //   * reenviado depois da largada não faz absolutamente nada;
+        //   * o comando de admin `/pit`, que é literalmente esta mesma chamada,
+        //     responde "You have been teleported to the pits" e também só
+        //     balança o carro.
+        //
+        // Quem posiciona o carro na largada é o JOGO, e o AC1 não tem noção de
+        // espectador no cliente. O caminho que funciona é o piloto apertar ESC
+        // e voltar ao box pelo menu -- manual, e de dois segundos.
+        //
+        // O QUE ELE PERDE: a hora da largada e o acerto de relógio vêm neste
+        // pacote. O `CurrentSessionUpdate` que a vaga recebe carrega o mesmo
+        // StartTime, e o relógio da sessão aparece certo na pista.
+        foreach (var car in _entryCarManager.EntryCars.Where(
+                     c => c.Client is { HasSentFirstUpdate: true } && !c.IsSpectator))
         {
             car.Client?.SendPacketUdp(new RaceStart()
             {

@@ -435,6 +435,30 @@ public class ACTcpClient : IClient
                             throw new InvalidOperationException("No EntryCar set even though handshake started");
 
                         EntryCar.SetActive();
+
+                        // THE ENTRY LIST WINS, WHEN IT SAYS ANYTHING.
+                        //
+                        // The handshake team is whatever the player typed into
+                        // their own Assetto Corsa, and the server relays it to
+                        // every client - it is where `ac.getDriverTeam()`
+                        // comes from. Relaying only that meant the entry
+                        // list's TEAM never reached anyone for an occupied
+                        // slot, so a slot the admin had labelled could not be
+                        // recognised by any HUD.
+                        //
+                        // HERE AND NOT AT THE HANDSHAKE, where the team is
+                        // read: `EntryCar` is still null up there - the slot
+                        // is what the handshake is asking for, and
+                        // `TrySecureSlotAsync` is what assigns it. Reading it
+                        // earlier threw a NullReferenceException on every
+                        // connection, measured 04/10/2026.
+                        //
+                        // ONLY WHEN DECLARED. The pack generator writes an
+                        // empty TEAM for drivers with no team on file; always
+                        // overriding would wipe every league driver's team
+                        // from the nameplate, quietly.
+                        if (!string.IsNullOrWhiteSpace(EntryCar.EquipeDaLista))
+                            Team = EntryCar.EquipeDaLista.Trim();
                         SupportsCSPCustomUpdate = _configuration.Extra.EnableCustomUpdate && cspFeatures.Contains("CUSTOM_UPDATE");
 
                         var cspVersionStr = cspFeatures.LastOrDefault("");

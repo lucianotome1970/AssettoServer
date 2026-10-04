@@ -52,6 +52,22 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
     /// torre, na placa e na barra de gap.
     /// </remarks>
     public string? DriverNameDaLista { get; internal set; }
+
+    /// <summary>
+    /// The team declared for this slot in the entry list, if any.
+    /// </summary>
+    /// <remarks>
+    /// THE CLIENT'S OWN TEAM IS NOT THE LEAGUE'S. A connected player sends its
+    /// team in the handshake - whatever is typed into that player's Assetto
+    /// Corsa - and the server used to relay only that, so the entry list's
+    /// TEAM never reached anyone for an occupied slot.
+    ///
+    /// THE BROADCAST SLOT NEEDS THIS. It is the only way a client can tell
+    /// that slot apart: the spectator bit is deliberately withheld from the
+    /// recipient, because a client that cannot see its own car dies on the
+    /// first packet addressed to it - see VagaDeTransmissao.
+    /// </remarks>
+    public string? EquipeDaLista { get; internal set; }
     public float Ballast { get; internal set; }
     public int Restrictor { get; internal set; }
     public string? FixedSetup { get; internal set; }
