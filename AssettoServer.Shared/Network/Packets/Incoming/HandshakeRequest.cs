@@ -14,9 +14,27 @@ public struct HandshakeRequest : IIncomingNetworkPacket, IOutgoingNetworkPacket
     public string? Features;
     public byte[]? SessionTicket;
 
+    /// <summary>
+    /// O tamanho que o cliente DECLAROU para o ticket, e o que de fato sobrou no
+    /// pacote. Diagnóstico.
+    /// </summary>
+    /// <remarks>
+    /// O ticket só é aceito quando os dois batem EXATAMENTE. Divergindo, ele é
+    /// descartado em silêncio e o sintoma vira "Missing session ticket" -- que
+    /// parece problema de Steam e não de formato. Estes dois números separam uma
+    /// coisa da outra: -1 nos dois significa que o cliente não mandou nada.
+    /// </remarks>
+    public int TicketDeclarado;
+    public int TicketDisponivel;
+
     public void FromReader(PacketReader reader)
     {
         ClientVersion = reader.Read<ushort>();
+        // -1 = o cliente nem chegou a declarar tamanho. Zero seria ambiguo com
+        // "declarou zero", e e justamente essa diferenca que se quer medir.
+        TicketDeclarado = -1;
+        TicketDisponivel = -1;
+
         if (ulong.TryParse(reader.ReadUTF8String(), out var guid))
             Guid = guid;
         Name = reader.ReadUTF32String();
@@ -32,6 +50,9 @@ public struct HandshakeRequest : IIncomingNetworkPacket, IOutgoingNetworkPacket
             if (reader.Buffer.Length > reader.ReadPosition + 2)
             {
                 short ticketLength = reader.Read<short>();
+                TicketDeclarado = ticketLength;
+                TicketDisponivel = reader.Buffer.Length - reader.ReadPosition;
+
                 if (ticketLength == reader.Buffer.Length - reader.ReadPosition)
                 {
                     SessionTicket = new byte[ticketLength];

@@ -58,9 +58,20 @@ public partial class EntryCar
     private readonly Func<EntryCar, AiState> _aiStateFactory;
     private readonly AiSpline? _spline;
 
+    /// <summary>
+    /// O nome que um carro de IA mostra: o da lista de inscritos, quando houver.
+    /// </summary>
+    /// <remarks>
+    /// CAI PARA O PREFIXO quando a lista nao diz nada, que e o caso de um servidor
+    /// de trafego -- "Traffic 7" e melhor que um nome em branco, e e o que o
+    /// upstream sempre fez. O nome so vence quando alguem o escreveu de proposito.
+    /// </remarks>
+    internal static string NomeDaIa(string? daLista, string prefixo, byte sessionId) =>
+        string.IsNullOrWhiteSpace(daLista) ? $"{prefixo} {sessionId}" : daLista.Trim();
+
     private void AiInit()
     {
-        AiName = $"{_configuration.Extra.AiParams.NamePrefix} {SessionId}";
+        AiName = NomeDaIa(DriverNameDaLista, _configuration.Extra.AiParams.NamePrefix, SessionId);
         SetAiOverbooking(0);
 
         _configuration.Extra.AiParams.PropertyChanged += OnConfigReload;

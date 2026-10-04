@@ -418,6 +418,19 @@ public class TrackLimitsService : BackgroundService
                     Argument = _configuration.PenaltyArgument
                 });
 
+                // E A TRANSMISSAO PRECISA SABER DE QUEM. Este vai para TODOS,
+                // com a vaga e o motivo, para a tarja de punicao entrar no ar.
+                // Separado do de cima de proposito: aquele carrega a INSTRUCAO
+                // de cumprimento, e mandar isso ao grid inteiro poria "PARE NO
+                // BOX EM 3 VOLTAS" em trinta e cinco telas por punicao alheia.
+                _entryCarManager.BroadcastPacket(new PenaltyBroadcastPacket
+                {
+                    Carro = client.SessionId,
+                    Mode = (byte)_modo,
+                    Argument = _configuration.PenaltyArgument,
+                    Motivo = $"{estado.Cortes} cortes de pista",
+                });
+
                 if (_configuration.AnnounceInChat)
                 {
                     // DIZ O QUE VAI ACONTECER, em vez do nome do modo. Um piloto

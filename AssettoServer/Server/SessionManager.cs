@@ -382,13 +382,23 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
         int invertedCount = 0;
         if (previousSessionResults == null)
         {
-            CurrentSession.Grid = _entryCarManager.EntryCars;
+            // SEM AS VAGAS DE TRANSMISSAO. O grid recebia TODOS os carros da
+            // entry list, e quem ocupa a vaga de transmissao era levado para a
+            // largada junto com o grid -- ocupando um lugar real e aparecendo
+            // na corrida, que e o oposto do que a vaga existe para fazer.
+            //
+            // Medido na pista: entrando pela vaga e avancando a sessao ate a
+            // corrida, o jogo tirava o carro do box e o punha no grid.
+            CurrentSession.Grid = VagaDeTransmissao.SemEspectadores(_entryCarManager.EntryCars);
         }
         else
         {
             var grid = previousSessionResults
                 .OrderBy(result => result.Value.BestLap)
                 .Select(result => _entryCarManager.EntryCars[result.Key])
+                // Tambem aqui: a vaga de transmissao nao marca volta, entao
+                // ela cairia no fim do grid -- mas ainda NO grid.
+                .Where(car => !car.IsSpectator)
                 .ToList();
 
             if (MustInvertGrid)

@@ -40,6 +40,18 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
     public string Model { get; }
     public string Skin { get; }
     public int SpectatorMode { get; internal set; }
+
+    /// <summary>
+    /// DRIVERNAME da lista de inscritos, quando houver.
+    /// </summary>
+    /// <remarks>
+    /// O UPSTREAM LIA E DESCARTAVA. Para um carro de gente o nome vem do cliente,
+    /// e por isso ninguem sentia falta; para um carro de IA o nome era sempre
+    /// "{NamePrefix} {SessionId}" -- "Traffic 7" --, e nao havia como dar nome de
+    /// piloto a um carro de teste. Numa transmissao de ensaio isso aparece na
+    /// torre, na placa e na barra de gap.
+    /// </remarks>
+    public string? DriverNameDaLista { get; internal set; }
     public float Ballast { get; internal set; }
     public int Restrictor { get; internal set; }
     public string? FixedSetup { get; internal set; }
