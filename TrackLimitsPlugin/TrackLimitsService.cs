@@ -1,4 +1,8 @@
-using System.Numerics;
+﻿using System.Numerics;
+using AssettoServer.Commands;
+using AssettoServer.Commands.Contexts;
+using AssettoServer.Network.ClientMessages;
+using AssettoServer.Network.Tcp;
 using AssettoServer.Server;
 using AssettoServer.Server.Ai.Splines;
 using AssettoServer.Server.Configuration;
@@ -27,6 +31,21 @@ public class TrackLimitsService : BackgroundService
     private readonly EntryCarManager _entryCarManager;
     private readonly SessionManager _sessionManager;
     private readonly AiSpline? _spline;
+
+    /// <summary>
+    /// O interpretador de comandos do chat, para executar o que a mesa clicou.
+    ///
+    /// <para>
+    /// `Lazy` DE PROPOSITO. `ChatService` recebe o `ACPluginLoader` no
+    /// construtor e percorre os plugins carregados para registrar os modulos de
+    /// comando -- entre eles o nosso. Pedi-lo aqui direto fecharia o circulo
+    /// plugin -> ChatService -> loader -> plugin na hora de montar o grafo.
+    /// </para>
+    /// </summary>
+    private readonly Lazy<ChatService> _chat;
+
+    /// <summary>A fabrica de contexto, que e como um comando sabe quem o mandou.</summary>
+    private readonly Func<ACTcpClient, ChatCommandContext> _contexto;
 
     /// <summary>
     /// The pit lane, so that using it is not mistaken for leaving the circuit.
@@ -76,9 +95,40 @@ public class TrackLimitsService : BackgroundService
         /// </para>
         /// </summary>
         public long? LimiteEnviadoEm;
+
+        /// <summary>Quando o aviso de admin foi mandado pela ultima vez.</summary>
+        public long? AdminEnviadoEm;
     }
 
     private readonly Dictionary<byte, Excursao> _estado = new();
+
+    /// <summary>
+    /// Quando cada par de carros se tocou pela última vez, para não anunciar
+    /// o mesmo contato duas vezes.
+    /// </summary>
+    /// <remarks>
+    /// DUAS RAZÕES, E AS DUAS SÃO DO PROTOCOLO, não exagero de cautela:
+    ///
+    /// O AC MANDA O CONTATO DOS DOIS LADOS — cada cliente reporta a própria
+    /// colisão. Um toque entre A e B chega como "A bateu em B" e "B bateu em
+    /// A", e na mesa viraria a mesma batida listada duas vezes, com os nomes
+    /// trocados. A chave é o par ORDENADO (menor, maior) justamente para os
+    /// dois caírem na mesma entrada.
+    ///
+    /// E CONTATO CONTÍNUO REPETE: dois carros raspando lado a lado disparam
+    /// evento atrás de evento enquanto durar o encosto.
+    /// </remarks>
+    private readonly Dictionary<(byte, byte), long> _ultimoContato = new();
+
+    /// <summary>
+    /// Janela em que um novo contato do mesmo par é tido como o mesmo fato.
+    /// </summary>
+    /// <remarks>
+    /// UM SEGUNDO E MEIO cobre o eco dos dois lados (que chega em milissegundos)
+    /// e um encosto curto, sem engolir o segundo toque de uma disputa — numa
+    /// briga de verdade os contatos vêm separados por bem mais que isso.
+    /// </remarks>
+    private const long JanelaDeContatoMs = 1500;
 
     /// <summary>
     /// O modo configurado, convertido na partida e nao a cada corte.
@@ -121,10 +171,16 @@ public class TrackLimitsService : BackgroundService
         ACServerConfiguration serverConfiguration,
         EntryCarManager entryCarManager,
         SessionManager sessionManager,
+        CSPClientMessageTypeManager cspMensagens,
+        Lazy<ChatService> chat,
+        Func<ACTcpClient, ChatCommandContext> contexto,
         AiSpline? spline = null,
         FastLaneParser? parser = null)
     {
         _configuration = configuration;
+        _chat = chat;
+        _contexto = contexto;
+        cspMensagens.RegisterOnlineEvent<ComandoAdminPacket>(AoReceberComando);
 
         // ERRO NA PARTIDA, e nao no meio da prova: ver `_modo`.
         if (!Enum.TryParse<CSPAdminPenaltyMode>(configuration.PenaltyMode, true, out _modo)
@@ -218,7 +274,25 @@ public class TrackLimitsService : BackgroundService
         using var timer = new PeriodicTimer(
             TimeSpan.FromMilliseconds(Math.Max(50, _configuration.IntervalMilliseconds)));
 
-        _sessionManager.SessionChanged += (_, _) => _estado.Clear();
+        _sessionManager.SessionChanged += (_, _) =>
+        {
+            _estado.Clear();
+            // A MEMÓRIA DE CONTATO TAMBÉM ZERA: o relógio do servidor não
+            // reinicia entre sessões, mas um par que se tocou na última volta
+            // do treino não pode calar o primeiro toque da corrida.
+            lock (_ultimoContato) _ultimoContato.Clear();
+        };
+
+        // A COLISÃO É ANUNCIADA PELO SERVIDOR porque o cliente não dá conta:
+        // `ac.onCarCollision` entrega só o índice do próprio carro, dispara uma
+        // vez por carro e roda dentro de replay — numa sessão inteira de teste
+        // ficou em zero detectados.
+        //
+        // POR CLIENTE, ao conectar: o evento é do `ACTcpClient`, e cada
+        // conexão traz um objeto novo. Não há o que desinscrever — o objeto
+        // morre com a conexão.
+        _entryCarManager.ClientConnected += (cliente, _) =>
+            cliente.Collision += AnunciarColisao;
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
@@ -231,6 +305,107 @@ public class TrackLimitsService : BackgroundService
                 Log.Error(ex, "TrackLimitsPlugin: error while checking track limits");
             }
         }
+    }
+
+    /// <summary>
+    /// Transmite um contato a todos, uma vez só por fato.
+    /// </summary>
+    /// <remarks>
+    /// NÃO FILTRA POR VELOCIDADE. Um encosto de 3 km/h na fila do box não é
+    /// notícia, mas quem decide isso é quem narra — e para decidir ele precisa
+    /// do número, que vai no pacote. Filtrar aqui jogaria fora o toque leve
+    /// que, repetido, vira o padrão de um piloto.
+    ///
+    /// NÃO JULGA CULPA: `carro` é quem reportou e `outro` é quem levou, que é
+    /// a ordem em que o AC entrega. Chamar o primeiro de causador seria
+    /// inventar um juiz a partir de quem detectou primeiro.
+    /// </remarks>
+    private void AnunciarColisao(ACTcpClient cliente, CollisionEventArgs e)
+    {
+        try
+        {
+            var meu = cliente.SessionId;
+            var outro = e.TargetCar?.SessionId ?? ColisaoPacket.Ambiente;
+
+            // O PAR ORDENADO é o que faz os dois lados do mesmo toque caírem
+            // na mesma entrada. Contra o muro, a chave é o carro e o 255.
+            var chave = meu <= outro ? (meu, outro) : (outro, meu);
+            var agora = _sessionManager.ServerTimeMilliseconds;
+            lock (_ultimoContato)
+            {
+                if (_ultimoContato.TryGetValue(chave, out var quando)
+                    && agora - quando < JanelaDeContatoMs)
+                {
+                    return;
+                }
+                _ultimoContato[chave] = agora;
+            }
+
+            _entryCarManager.BroadcastPacket(new ColisaoPacket
+            {
+                Carro = meu,
+                Outro = outro,
+                Kmh = e.Speed,
+            });
+        }
+        catch (Exception ex)
+        {
+            // NÃO DERRUBA A CONEXÃO: isto roda na thread que lê os pacotes do
+            // cliente, e uma falha aqui tiraria o piloto da corrida por causa
+            // de um aviso de transmissão.
+            Log.Error(ex, "TrackLimitsPlugin: falha ao anunciar colisao");
+        }
+    }
+
+    /// <summary>
+    /// Executa um comando pedido pelo HUD, se quem pediu for admin.
+    ///
+    /// <para>
+    /// O PORTAO E O MESMO DO CHAT, e nao um portao novo: quem chega aqui com
+    /// `IsAdministrator` podia digitar a mesma linha no chat e obter o mesmo
+    /// efeito. O canal troca digitar por clicar, e nao amplia poder.
+    /// </para>
+    ///
+    /// <para>
+    /// A RECUSA E CALADA PARA QUEM NAO E ADMIN, e so para ele. Responder
+    /// "voce nao e admin" a um cliente adulterado so ensinaria que o canal
+    /// existe e que ha um teste para passar; o log do servidor registra a
+    /// tentativa, que e onde a liga precisa ver.
+    /// </para>
+    ///
+    /// <para>
+    /// TODO COMANDO E REGISTRADO, aceito ou recusado. Uma mesa que pune, muda
+    /// clima e expulsa gente precisa deixar rastro de quem fez o que -- e e o
+    /// rastro que permite a liga responder a uma reclamacao depois da prova.
+    /// </para>
+    /// </summary>
+    private void AoReceberComando(ACTcpClient client, ComandoAdminPacket pacote)
+    {
+        var texto = (pacote.Texto ?? "").Trim();
+
+        if (!client.IsAdministrator)
+        {
+            Log.Warning("TrackLimitsPlugin: {Name} ({SessionId}) nao e admin e "
+                + "pediu '{Comando}' -- recusado", client.Name, client.SessionId, texto);
+            return;
+        }
+
+        if (texto.Length == 0) return;
+
+        // A BARRA E APARADA AQUI, e nao exigida do Lua: o interpretador recebe o
+        // comando JA sem prefixo (ver `ChatService.OnChatMessageReceived`, que
+        // chama `HasPrefix` e substitui a mensagem pelo resto). Mandar com barra
+        // procuraria um comando chamado "/kick", que nao existe.
+        if (texto[0] == '/') texto = texto[1..].Trim();
+
+        Log.Information("TrackLimitsPlugin: admin {Name} ({SessionId}) -> '{Comando}'",
+            client.Name, client.SessionId, texto);
+
+        // SEM `await`, e por isso `_ =`: isto roda na thread de rede, e um
+        // comando que demore -- `ban` grava arquivo -- nao pode segurar os
+        // pacotes dos outros 34 carros. A resposta volta pelo chat, de onde o
+        // HUD a le.
+        _ = _chat.Value.ProcessCommandAsync(_contexto(client), texto);
     }
 
     private void Tick()
@@ -293,6 +468,23 @@ public class TrackLimitsService : BackgroundService
                     Log.Information("TrackLimitsPlugin: pit limit {Kmh} km/h sent to {Name} "
                         + "({SessionId})", kmhDoPit, client.Name, client.SessionId);
                 }
+            }
+
+            // QUEM E ADMIN FICA SABENDO, para o HUD abrir a mesa de comandos.
+            //
+            // NO MESMO RITMO DO LIMITE DE PIT e pelo mesmo motivo medido ali:
+            // o handshake do CSP chega segundos depois da conexao, e o CSP
+            // recarrega o app quando o arquivo muda. Uma mensagem unica se
+            // perderia nos dois casos -- e perder esta deixa o comissario sem
+            // mesa, sem nada na tela que explique por que.
+            //
+            // SO PARA ADMIN: a ausencia e a resposta negativa, e nao ha pacote
+            // para os outros 34.
+            if (client.IsAdministrator
+                && DeveReenviar(estado.AdminEnviadoEm, agora, IntervaloDoLimiteMs))
+            {
+                estado.AdminEnviadoEm = agora;
+                client.SendPacket(new SouAdminPacket());
             }
 
             var (pointId, _) = _spline!.WorldToSpline(car.Status.Position);
