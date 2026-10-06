@@ -1,4 +1,4 @@
-using JetBrains.Annotations;
+﻿using JetBrains.Annotations;
 
 namespace ResultsPlugin;
 
@@ -21,6 +21,39 @@ public class ResultFile
     public List<ResultEntry> Result { get; init; } = [];
     public List<LapEntry> Laps { get; init; } = [];
     public List<object> Events { get; init; } = [];
+
+    // ---------------------------------------------------------------------
+    // ACRESCENTADOS PELA LIGA. O acServer nao escreve nenhum dos dois.
+    //
+    // ACRESCENTAR E SEGURO, RENOMEAR NAO E -- ver o aviso no topo desta
+    // classe. Leitor que nao conhece estes campos simplesmente os ignora, e
+    // os arquivos antigos continuam validos (chegam com string vazia).
+
+    /// <summary>
+    /// O nome do servidor, que o formato do acServer nao carrega.
+    ///
+    /// SEM ELE NAO HA COMO SABER DE ONDE VEIO o resultado: o arquivo so tem
+    /// pista, tipo e tempos. Quem importa varios servidores precisa separar.
+    /// </summary>
+    public string ServerName { get; init; } = "";
+
+    /// <summary>
+    /// A etapa a que este resultado pertence, ou vazio em treino livre.
+    ///
+    /// ESTE CAMPO E A DISTINCAO ENTRE OS DOIS TIPOS DE IMPORTACAO. Vazio, o
+    /// resultado alimenta so o ranking do servidor; preenchido, ele e o
+    /// resultado OFICIAL daquela etapa.
+    ///
+    /// POR QUE NAO IMITAMOS O ACC: la o codigo do evento vai escondido num
+    /// sufixo "#XXXX" do nome do servidor, e o casamento ainda depende de
+    /// bater o nome da pista. Renomear o servidor quebra em silencio. Aqui e
+    /// um campo proprio, escrito por quem gera a etapa e lido por quem
+    /// importa -- e continua valendo se todo o resto mudar.
+    ///
+    /// VEM DA CONFIGURACAO DO PLUGIN (`plugin_results_cfg.yml`), que o
+    /// gerador de pacote da liga escreve junto com o resto da etapa.
+    /// </summary>
+    public string EventoId { get; init; } = "";
 }
 
 [UsedImplicitly(ImplicitUseKindFlags.Access, ImplicitUseTargetFlags.WithMembers)]
@@ -71,4 +104,41 @@ public class LapEntry
     public int BallastKG { get; init; }
     public string Tyre { get; init; } = "";
     public int Restrictor { get; init; }
+
+    // ----------------- AS CONDICOES NO INSTANTE DESTA VOLTA -----------------
+    //
+    // ACRESCENTADO PELA LIGA. O acServer nao grava condicao nenhuma.
+    //
+    // POR VOLTA, E NAO POR SESSAO. A temperatura do `server_cfg.ini` e a
+    // INICIAL: numa corrida de 30 minutos o asfalto sobe vários graus e o grip
+    // evolui com a borracha. Guardar um bloco unico no topo registraria as
+    // condicoes do FIM -- e a volta rapida costuma vir quando elas mudaram.
+    // Assim um recorde de pista carrega as condicoes DELE, e duas voltas so se
+    // comparam sabendo em que asfalto cada uma foi feita.
+    //
+    // LIDO QUANDO A VOLTA FECHA, em `OnLapCompleted`, e nao na hora de
+    // escrever o arquivo -- que acontece no fim da sessao.
+
+    /// <summary>Temperatura do ar, em graus.</summary>
+    public float TempAr { get; init; }
+
+    /// <summary>Temperatura do asfalto, em graus.</summary>
+    public float TempPista { get; init; }
+
+    /// <summary>Grip da pista, de 0 a 1. Evolui com a borracha e com a chuva.</summary>
+    public float Grip { get; init; }
+
+    /// <summary>Intensidade da chuva, 0 em pista seca.</summary>
+    public float Chuva { get; init; }
+
+    /// <summary>Quanto a pista esta molhada, 0 a 1. Seca depois de parar de chover.</summary>
+    public float Molhado { get; init; }
+
+    /// <summary>Vento em km/h e a direcao em graus.</summary>
+    public float VentoKmh { get; init; }
+
+    public int VentoGraus { get; init; }
+
+    /// <summary>Hora NA PISTA, no formato "HH:MM" -- nao e a hora do servidor.</summary>
+    public string HoraNaPista { get; init; } = "";
 }

@@ -98,6 +98,9 @@ public class TrackLimitsService : BackgroundService
 
         /// <summary>Quando o aviso de admin foi mandado pela ultima vez.</summary>
         public long? AdminEnviadoEm;
+
+        /// <summary>Quando o nome do evento foi mandado pela ultima vez.</summary>
+        public long? NomeEnviadoEm;
     }
 
     private readonly Dictionary<byte, Excursao> _estado = new();
@@ -148,6 +151,9 @@ public class TrackLimitsService : BackgroundService
     /// </summary>
     private readonly int? _limiteDePit;
 
+    /// <summary>O nome do evento, como o servidor o anuncia. Ver EventoPacket.</summary>
+    private readonly string _nomeDoEvento;
+
     /// <summary>De quanto em quanto tempo o limite de pit e repetido.</summary>
     public const long IntervaloDoLimiteMs = 10_000;
 
@@ -193,6 +199,11 @@ public class TrackLimitsService : BackgroundService
         _entryCarManager = entryCarManager;
         _sessionManager = sessionManager;
         _spline = spline;
+
+        // SEM O SUFIXO DE PORTA: o `/INFO` junta " ℹ9232" para o Content
+        // Manager achar a porta de informacao. E protocolo, nao nome.
+        _nomeDoEvento = serverConfiguration.Server.Name ?? "";
+        if (_nomeDoEvento.Length > 63) _nomeDoEvento = _nomeDoEvento[..63];
 
         _limiteDePit = LimiteDePit.Ler(serverConfiguration.WelcomeMessage);
         Log.Information("TrackLimitsPlugin: pit speed limit {Limit}",
@@ -468,6 +479,17 @@ public class TrackLimitsService : BackgroundService
                     Log.Information("TrackLimitsPlugin: pit limit {Kmh} km/h sent to {Name} "
                         + "({SessionId})", kmhDoPit, client.Name, client.SessionId);
                 }
+            }
+
+            // O NOME DO EVENTO, no mesmo ritmo. Ver `EventoPacket`: o cliente
+            // nao tem fonte confiavel para isto -- `getServerName` le o
+            // `race.ini` do Content Manager, que envelhece, e a mensagem de
+            // boas-vindas chega antes de o app existir.
+            if (_nomeDoEvento.Length > 0
+                && DeveReenviar(estado.NomeEnviadoEm, agora, IntervaloDoLimiteMs))
+            {
+                estado.NomeEnviadoEm = agora;
+                client.SendPacket(new EventoPacket { Nome = _nomeDoEvento });
             }
 
             // QUEM E ADMIN FICA SABENDO, para o HUD abrir a mesa de comandos.

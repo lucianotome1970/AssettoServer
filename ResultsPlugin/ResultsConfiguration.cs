@@ -1,4 +1,4 @@
-using AssettoServer.Server.Configuration;
+﻿using AssettoServer.Server.Configuration;
 using JetBrains.Annotations;
 using YamlDotNet.Serialization;
 
@@ -18,4 +18,11 @@ public class ResultsConfiguration
     [YamlMember(Description =
         "Keep at most this many result files, deleting the oldest. 0 keeps everything")]
     public int KeepFiles { get; init; } = 0;
+
+    [YamlMember(Description =
+        "League event this server is running, written into every result file as "
+        + "EventoId. Leave empty for free practice servers: an empty value means "
+        + "the result only feeds the server ranking, a filled one makes it the "
+        + "official result of that event")]
+    public string EventoId { get; init; } = "";
 }
