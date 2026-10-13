@@ -17,7 +17,13 @@ public class AiSpline : IDisposable
     // 2: SplinePoint gained SideLeft/SideRight. The cache stores the struct
     // raw, so a version 1 cache read with this layout would shift every
     // field -- plausible, wrong widths, with nothing to flag it.
-    public const int SupportedVersion = 2;
+    //
+    // 3: `Length` passou a ser medido pelas POSICOES, e nao lido do arquivo --
+    // ver `FastLaneParser.CorrigirComprimentos`. O LAYOUT NAO MUDOU, so o
+    // CONTEUDO: sem subir a versao, todo servidor que ja rodou uma vez leria o
+    // cache antigo, com os comprimentos errados, e a correcao nao teria efeito
+    // nenhum -- sem erro, sem aviso, so continuando errado.
+    public const int SupportedVersion = 3;
     
     private readonly MemoryMappedFile _file;
     private readonly IMappedMemory _fileAccessor;

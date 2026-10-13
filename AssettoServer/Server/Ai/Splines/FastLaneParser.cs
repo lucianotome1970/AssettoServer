@@ -188,7 +188,49 @@ public class FastLaneParser
             /*points[i].Grade*/ _ = reader.ReadSingle();
         }
 
+        CorrigirComprimentos(points);
         return points;
+    }
+
+    /// <summary>
+    /// Recalcula o comprimento de cada trecho pela POSICAO dos pontos.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// O CAMPO DO ARQUIVO NAO E A DISTANCIA AO PROXIMO PONTO. Medido na
+    /// sr_guapore: 1949 pontos, perimetro de 2998 m pelas posicoes -- passo
+    /// real de 1,54 m --, e o campo lido traz 7,70 m, exatos 5,01x mais. O
+    /// alinhamento da leitura esta certo: o campo vizinho e o Y da normal e
+    /// vale 0,999, como tem de valer para um vetor que aponta para cima.
+    /// </para>
+    /// <para>
+    /// O QUE ISSO ESTRAGAVA: o servidor soma este campo para medir distancia
+    /// percorrida. A busca por obstaculo para quando a soma alcanca a
+    /// distancia de frenagem -- com o valor 5x maior, ela parava apos um
+    /// QUINTO do caminho, e a IA so enxergava a curva perto demais. E o grid
+    /// de 12 m que eu montava saia com 2,4 m, com os carros quase empilhados.
+    /// </para>
+    /// <para>
+    /// A DISTANCIA ENTRE DOIS PONTOS E A DISTANCIA ENTRE AS POSICOES DELES --
+    /// isso vale em qualquer pista, com qualquer gerador de tracado, e nao
+    /// depende de o campo estar certo ou errado neste ou naquele arquivo.
+    /// </para>
+    /// <para>
+    /// O ULTIMO PONTO HERDA O ANTERIOR: num tracado fechado ele liga no
+    /// primeiro, mas num aberto (o pit lane) nao liga em lugar nenhum, e medir
+    /// ate o inicio daria o comprimento da pista inteira num trecho so.
+    /// </para>
+    /// </remarks>
+    private static void CorrigirComprimentos(SplinePoint[] points)
+    {
+        if (points.Length < 2) return;
+
+        for (var i = 0; i < points.Length - 1; i++)
+        {
+            points[i].Length = Vector3.Distance(points[i].Position, points[i + 1].Position);
+        }
+
+        points[^1].Length = points[^2].Length;
     }
         
     private SplinePoint[] FromFileVn1(BinaryReader reader, int idOffset)

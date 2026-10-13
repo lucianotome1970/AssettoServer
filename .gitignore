@@ -363,6 +363,8 @@ MigrationBackup/
 FodyWeavers.xsd
 
 out-linux-*
+out-*/
+out-/
 out-win-*
 
 # Jetbrains IDEs

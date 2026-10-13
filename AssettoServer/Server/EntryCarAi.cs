@@ -30,6 +30,12 @@ public partial class EntryCar
     public bool AiEnableColorChanges { get; set; } = false;
     public int AiIdleEngineRpm { get; set; } = 800;
     public int AiMaxEngineRpm { get; set; } = 3000;
+
+    /// <summary>As relacoes da caixa, da primeira para a ultima. Vazio = sem trocas.</summary>
+    public float[]? AiGearRatios { get; set; }
+
+    /// <summary>A relacao final, usada junto de <see cref="AiGearRatios"/>.</summary>
+    public float AiFinalRatio { get; set; } = 1f;
     public float AiAcceleration { get; set; }
     public float AiDeceleration { get; set; }
     public float AiCorneringSpeedFactor { get; set; }
@@ -59,19 +65,41 @@ public partial class EntryCar
     private readonly AiSpline? _spline;
 
     /// <summary>
-    /// O nome que um carro de IA mostra: o da lista de inscritos, quando houver.
+    /// O nome que um carro de IA mostra, em tres degraus.
     /// </summary>
     /// <remarks>
-    /// CAI PARA O PREFIXO quando a lista nao diz nada, que e o caso de um servidor
-    /// de trafego -- "Traffic 7" e melhor que um nome em branco, e e o que o
-    /// upstream sempre fez. O nome so vence quando alguem o escreveu de proposito.
+    /// <para>
+    /// A ORDEM E A REGRA INTEIRA:
+    /// </para>
+    /// <list type="number">
+    /// <item>O <c>DRIVERNAME</c> da lista de inscritos, quando alguem escreveu
+    /// um. Escrito a mao vence tudo -- e o unico caso em que a intencao e
+    /// explicita.</item>
+    /// <item>A lista de <c>cfg/nomes_ia.txt</c>, pelo indice de sessao. E o que
+    /// faz a torre e a mesa parecerem uma corrida, e nao um teste.</item>
+    /// <item>O prefixo mais o numero da vaga -- "Traffic 7" --, que e o que o
+    /// upstream sempre fez e serve a um servidor de trafego, onde o nome nao
+    /// importa.</item>
+    /// </list>
+    /// <para>
+    /// NUNCA VAZIO: um carro sem nome na torre e pior que um nome generico,
+    /// porque some da leitura em vez de ocupar uma linha.
+    /// </para>
     /// </remarks>
-    internal static string NomeDaIa(string? daLista, string prefixo, byte sessionId) =>
-        string.IsNullOrWhiteSpace(daLista) ? $"{prefixo} {sessionId}" : daLista.Trim();
+    internal static string NomeDaIa(string? daLista, string prefixo, byte sessionId, NomesDeIa? lista = null)
+    {
+        if (!string.IsNullOrWhiteSpace(daLista)) return daLista.Trim();
+        var daListaDeNomes = lista?.Para(sessionId);
+        return string.IsNullOrWhiteSpace(daListaDeNomes) ? $"{prefixo} {sessionId}" : daListaDeNomes;
+    }
 
     private void AiInit()
     {
-        AiName = NomeDaIa(DriverNameDaLista, _configuration.Extra.AiParams.NamePrefix, SessionId);
+        AiName = NomeDaIa(
+            DriverNameDaLista,
+            _configuration.Extra.AiParams.NamePrefix,
+            SessionId,
+            NomesDeIa.Carregar(_configuration.BaseFolder));
         SetAiOverbooking(0);
 
         _configuration.Extra.AiParams.PropertyChanged += OnConfigReload;
@@ -102,6 +130,10 @@ public partial class EntryCar
                     AiIdleEngineRpm = carOverrides.EngineIdleRpm.Value;
                 if (carOverrides.EngineMaxRpm.HasValue)
                     AiMaxEngineRpm = carOverrides.EngineMaxRpm.Value;
+                if (carOverrides.GearRatios is { Count: > 0 })
+                    AiGearRatios = carOverrides.GearRatios.ToArray();
+                if (carOverrides.FinalRatio.HasValue)
+                    AiFinalRatio = carOverrides.FinalRatio.Value;
                 if (carOverrides.Acceleration.HasValue)
                     AiAcceleration = carOverrides.Acceleration.Value;
                 if (carOverrides.Deceleration.HasValue)
@@ -271,6 +303,62 @@ public partial class EntryCar
         }
     }
     
+    /// <summary>
+    /// Poe este carro na largada, num ponto do tracado.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// UM ESTADO SO. Em trafego, uma vaga do entry_list rende VARIOS carros ao
+    /// mesmo tempo -- e o "overbooking", que enche uma estrada de 200 veiculos
+    /// com 30 vagas, porque ninguem na estrada repara que o mesmo modelo passou
+    /// duas vezes. Numa corrida isso seria o mesmo piloto em dois lugares da
+    /// pista, com uma volta so contando: o resto do grid acreditaria no carro
+    /// que esta ao lado e a tabela diria outra coisa.
+    /// </para>
+    /// <para>
+    /// Por isso aqui se usa o PRIMEIRO estado e os demais sao aposentados.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Uma volta deste carro de IA, vinda do <c>AiState</c>.
+    /// </summary>
+    /// <remarks>
+    /// SO REPASSA. A regra de corrida -- aceitar ou nao, melhor volta, posicao
+    /// -- mora no <c>SessionManager</c>, junto da do piloto de verdade. Decidir
+    /// qualquer coisa aqui criaria uma segunda regra de corrida, que divergiria
+    /// da primeira na proxima correcao feita so de um lado.
+    /// </remarks>
+    public void VoltaDaIa(uint lapTimeMs) => _sessionManager.OnVoltaDeIa(SessionId, lapTimeMs);
+
+    public void LargarEm(int pointId)
+    {
+        // O CARRO PRECISA EXISTIR ANTES DE SER COLOCADO NA PISTA.
+        //
+        // `AiInit` chama `SetAiOverbooking(0)`: a lista de estados nasce VAZIA,
+        // e em trafego quem a enche e o `AdjustOverbooking`, disparado quando
+        // alguem conecta -- a quantidade de IA depende de quantos jogadores ha.
+        //
+        // Sem esta linha, `LargarEm` percorria uma lista vazia e nao fazia
+        // nada: o grid era montado, o log dizia que largaram, e a pista ficava
+        // deserta. Nao havia erro em lugar nenhum -- so ausencia.
+        if (TargetAiStateCount < 1) SetAiOverbooking(1);
+
+        var primeiro = true;
+        foreach (var aiState in AiStatesSpan)
+        {
+            if (aiState == null) continue;
+            if (primeiro)
+            {
+                aiState.Teleport(pointId);
+                primeiro = false;
+            }
+            else
+            {
+                aiState.Despawn();
+            }
+        }
+    }
+
     public bool CanSpawnAiState(Vector3 spawnPoint, AiState aiState)
     {
         // Remove state if AI slot overbooking was reduced

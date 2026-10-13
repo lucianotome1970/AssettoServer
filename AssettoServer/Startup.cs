@@ -100,6 +100,8 @@ public class Startup
         builder.RegisterType<CSPClientMessageTypeManager>().AsSelf().SingleInstance();
         builder.RegisterType<CSPClientMessageHandler>().AsSelf().SingleInstance();
         builder.RegisterType<VoteManager>().AsSelf().SingleInstance();
+        builder.Register(c => new BopDaLiga(c.Resolve<ACServerConfiguration>().Extra.BopDaLiga))
+            .AsSelf().SingleInstance();
         builder.RegisterType<EntryCarManager>().AsSelf().SingleInstance();
         builder.RegisterType<IpApiGeoParamsProvider>().As<IGeoParamsProvider>();
         builder.RegisterType<GeoParamsManager>().AsSelf().SingleInstance();

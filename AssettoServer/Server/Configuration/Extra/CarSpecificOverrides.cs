@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using JetBrains.Annotations;
 using YamlDotNet.Serialization;
 
@@ -15,6 +15,32 @@ public class CarSpecificOverrides
     public int? EngineIdleRpm { get; init; }
     [YamlMember(Description = "AI engine max RPM")]
     public int? EngineMaxRpm { get; init; }
+
+    /// <summary>
+    /// As relacoes da caixa, da primeira para a ultima.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// SEM ELAS O CARRO NAO TROCA DE MARCHA: o servidor manda `Gear=2` fixo e
+    /// inventa o conta-giros como uma rampa linear com a velocidade. Num carro
+    /// de trafego isso nao incomoda ninguem; num grid de corrida, o som sai
+    /// continuo enquanto o carro do piloto sobe e cai de giro a cada troca --
+    /// e a diferenca e imediata para quem ouve.
+    /// </para>
+    /// <para>
+    /// SAEM DO `drivetrain.ini` DO PROPRIO CARRO, de dentro do data.acd. Para
+    /// o Clio Cup da liga: 2.050, 1.722, 1.375, 1.136, 0.962, 0.828, com
+    /// FINAL=4.450.
+    /// </para>
+    /// <para>
+    /// VAZIO MANTEM O COMPORTAMENTO ANTIGO. Um palpite de relacao daria um
+    /// motor que troca nos lugares errados, que soa pior que um que nao troca.
+    /// </para>
+    /// </remarks>
+    public List<float>? GearRatios { get; init; }
+
+    /// <summary>A relacao final. So vale junto de <see cref="GearRatios"/>.</summary>
+    public float? FinalRatio { get; init; }
     [YamlMember(Description = "AI car deceleration for obstacle/collision detection (m/s^2)")]
     public float? Acceleration { get; init; }
     [YamlMember(Description = "AI car acceleration for obstacle/collision detection (m/s^2)")]

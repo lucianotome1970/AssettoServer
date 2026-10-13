@@ -7,4 +7,6 @@ namespace AssettoServer.Network.Http;
 [JsonSerializable(typeof(InfoResponse))]
 [JsonSerializable(typeof(DetailResponse))]
 [JsonSerializable(typeof(EntryListResponse))]
+// A rota da liga: ver LigaController.
+[JsonSerializable(typeof(AoVivoResponse))]
 internal partial class JsonSourceGenerationContext : JsonSerializerContext;

@@ -25,6 +25,7 @@ public class EntryCarManager
     private readonly IBlacklistService _blacklist;
     private readonly EntryCar.Factory _entryCarFactory;
     private readonly IAdminService _adminService;
+    private readonly BopDaLiga _bop;
     private readonly SemaphoreSlim _connectSemaphore = new(1, 1);
     private readonly Lazy<OpenSlotFilterChain> _openSlotFilterChain;
 
@@ -48,9 +49,10 @@ public class EntryCarManager
     /// </summary>
     public event EventHandler<ACTcpClient, EventArgs>? ClientDisconnected;
 
-    public EntryCarManager(ACServerConfiguration configuration, EntryCar.Factory entryCarFactory, IBlacklistService blacklist, IAdminService adminService, Lazy<OpenSlotFilterChain> openSlotFilterChain)
+    public EntryCarManager(ACServerConfiguration configuration, EntryCar.Factory entryCarFactory, IBlacklistService blacklist, IAdminService adminService, Lazy<OpenSlotFilterChain> openSlotFilterChain, BopDaLiga bop)
     {
         _configuration = configuration;
+        _bop = bop;
         _entryCarFactory = entryCarFactory;
         _blacklist = blacklist;
         _adminService = adminService;
@@ -185,24 +187,62 @@ public class EntryCarManager
 
             IEnumerable<EntryCar> candidates;
 
-            // Support for SLOT_INDEX CSP feature. CSP sends "car_model:n" where n is the specific slot index the user wants to connect to.
-            var slotIndexSeparator = handshakeRequest.RequestedCar.IndexOf(':');
-            if (slotIndexSeparator >= 0)
+            // A VAGA RESERVADA PARA ESTE GUID VENCE O CARRO QUE ELE PEDIU.
+            //
+            // E o que o ACC faz: a lista de inscritos diz qual carro e de quem,
+            // e quem entra com outro aparece na pista com o da lista. No AC1 o
+            // padrao e o oposto -- as candidatas sao filtradas pelo modelo
+            // pedido, entao o piloto que esquece de trocar o carro no Content
+            // Manager e simplesmente RECUSADO, com uma mensagem que nao diz
+            // qual carro ele deveria ter escolhido.
+            //
+            // O CLIENTE JA E AVISADO: o `HandshakeResponse` devolve
+            // `CarModel = EntryCar.Model`, e nao o que foi pedido. Ele carrega
+            // o carro da vaga.
+            //
+            // NASCE DESLIGADA, e isso e deliberado: isto muda comportamento na
+            // PORTA DE ENTRADA, e uma surpresa aqui tranca a prova inteira para
+            // fora. Liga-se numa etapa depois de provado num treino.
+            EntryCar? reservada = null;
+            if (_configuration.Extra.VagaDoGuidVenceOCarroPedido)
             {
-                var requestedSlotIndex = int.Parse(handshakeRequest.RequestedCar.AsSpan(slotIndexSeparator + 1));
-                var requestedCarName = handshakeRequest.RequestedCar[..slotIndexSeparator];
-                var candidate = EntryCars.Where(c => c.Model == requestedCarName).ElementAtOrDefault(requestedSlotIndex);
+                reservada = EntryCars.FirstOrDefault(c =>
+                    c.Client == null && c.AllowedGuids.Contains(handshakeRequest.Guid));
+            }
 
-                if (candidate == null)
+            if (reservada != null)
+            {
+                if (reservada.Model != handshakeRequest.RequestedCar)
                 {
-                    return false;
+                    Log.Information(
+                        "{Name} ({Guid}) pediu {Pedido} e tem vaga reservada com {Dela} -- "
+                        + "entrando com o carro da vaga",
+                        handshakeRequest.Name, handshakeRequest.Guid,
+                        handshakeRequest.RequestedCar, reservada.Model);
                 }
-                
-                candidates = [candidate];
+                candidates = [reservada];
             }
             else
             {
-                candidates = EntryCars.Where(c => c.Model == handshakeRequest.RequestedCar);
+                // Support for SLOT_INDEX CSP feature. CSP sends "car_model:n" where n is the specific slot index the user wants to connect to.
+                var slotIndexSeparator = handshakeRequest.RequestedCar.IndexOf(':');
+                if (slotIndexSeparator >= 0)
+                {
+                    var requestedSlotIndex = int.Parse(handshakeRequest.RequestedCar.AsSpan(slotIndexSeparator + 1));
+                    var requestedCarName = handshakeRequest.RequestedCar[..slotIndexSeparator];
+                    var candidate = EntryCars.Where(c => c.Model == requestedCarName).ElementAtOrDefault(requestedSlotIndex);
+
+                    if (candidate == null)
+                    {
+                        return false;
+                    }
+
+                    candidates = [candidate];
+                }
+                else
+                {
+                    candidates = EntryCars.Where(c => c.Model == handshakeRequest.RequestedCar);
+                }
             }
 
             var isAdmin = await _adminService.IsAdminAsync(handshakeRequest.Guid);
@@ -211,6 +251,14 @@ public class EntryCarManager
                 if (entryCar.Client == null && (isAdmin || await _openSlotFilterChain.Value.IsSlotOpen(entryCar, handshakeRequest.Guid)))
                 {
                     entryCar.Reset();
+                    // O BOP DO CARRO, ANTES DE O CLIENTE TERMINAR DE ENTRAR.
+                    //
+                    // Aqui porque o lote de conexao, montado logo depois, ja
+                    // leva `BallastUpdate` de todos os carros: aplicando agora
+                    // o valor viaja junto e ninguem precisa de um segundo
+                    // pacote. E vale para VAGA ABERTA, que e o caso que o
+                    // `entry_list` nao alcanca -- ver `BopDaLiga`.
+                    _bop.Aplicar(entryCar);
                     entryCar.Client = client;
                     client.EntryCar = entryCar;
                     client.SessionId = entryCar.SessionId;

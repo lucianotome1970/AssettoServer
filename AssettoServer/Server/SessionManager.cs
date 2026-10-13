@@ -120,6 +120,68 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
         }
     }
 
+    /// <summary>
+    /// Registra a volta de um carro de IA.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// POR QUE PRECISA DE UM CAMINHO PROPRIO: toda a escrituracao de corrida --
+    /// voltas, melhor volta, tempo total, posicao -- e disparada por
+    /// <see cref="OnLapCompleted"/>, que exige um <c>ACTcpClient</c>. Carro de
+    /// IA nao tem cliente: ele nao manda pacote nenhum, quem o move e o proprio
+    /// servidor. Sem isto a IA correria sem nunca aparecer na torre.
+    /// </para>
+    /// <para>
+    /// ESCREVE NA MESMA TABELA, de proposito. <c>CurrentSession.Results</c> e o
+    /// que vira o pacote de classificacao que todo cliente recebe; duplicar a
+    /// contagem noutro lugar daria duas verdades sobre a mesma corrida.
+    /// </para>
+    /// <para>
+    /// NAO ANUNCIA SOZINHO: quem envia o pacote de classificacao e o cliente
+    /// que cruza a linha. A IA entra na proxima atualizacao, que numa corrida
+    /// com gente na pista acontece a cada poucos segundos. Mandar um pacote por
+    /// volta de IA encheria a rede com quinze anuncios por volta.
+    /// </para>
+    /// </remarks>
+    public void OnVoltaDeIa(byte sessionId, uint lapTimeMs)
+    {
+        var resultado = CurrentSession.Results?[sessionId];
+        if (resultado == null) return;
+        if (resultado.HasCompletedLastLap) return;
+
+        if (CurrentSession.Configuration.Type == SessionType.Race
+            && resultado.NumLaps >= CurrentSession.Configuration.Laps
+            && !CurrentSession.Configuration.IsTimedRace)
+        {
+            return;
+        }
+
+        resultado.LastLap = lapTimeMs;
+        resultado.NumLaps++;
+        resultado.TotalTime = (uint)CurrentSession.SessionTimeMilliseconds;
+
+        if (lapTimeMs < resultado.BestLap)
+        {
+            resultado.BestLap = lapTimeMs;
+        }
+
+        if (resultado.NumLaps > CurrentSession.LeaderLapCount)
+        {
+            CurrentSession.LeaderLapCount = resultado.NumLaps;
+        }
+
+        if (CurrentSession.Configuration.Type == SessionType.Race)
+        {
+            foreach (var res in CurrentSession.Results!
+                         .OrderByDescending(car => car.Value.NumLaps)
+                         .ThenBy(car => car.Value.TotalTime)
+                         .Select((x, i) => new { Car = x, Index = i }))
+            {
+                res.Car.Value.RacePos = (uint)res.Index;
+            }
+        }
+    }
+
     public bool OnLapCompleted(ACTcpClient client, LapCompletedIncoming lap)
     {
         int timestamp = (int)ServerTimeMilliseconds;
@@ -145,6 +207,9 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
         if (CurrentSession.Configuration.Type == SessionType.Race || lap.Cuts == 0)
         {
             entryCarResult.LastLap = lap.LapTime;
+            // OS SETORES VINHAM E IAM EMBORA: o pacote traz `Splits` desde
+            // sempre e ninguem guardava. Ver `EntryCarResult.LastSplits`.
+            entryCarResult.LastSplits = lap.Splits;
             entryCarResult.NumLaps++;
             entryCarResult.TotalTime = (uint)(CurrentSession.SessionTimeMilliseconds - client.EntryCar.Ping / 2);
 
@@ -330,7 +395,22 @@ public class SessionManager : BackgroundService, IHostedLifecycleService
             }
         }
 
-        CurrentSession.OverTimeMilliseconds = 1;
+        // A VOLTA DE DESACELERACAO. Ver `SegundosDepoisDoUltimo`.
+        //
+        // Aqui chegavamos com `= 1`, ou seja: no quadro em que o ultimo carro
+        // completa, a sessao acaba e o AC leva todo mundo para o box. Para uma
+        // corrida transmitida isso e um corte seco -- some a bandeirada, some o
+        // vencedor comemorando, e o narrador fica falando sobre uma tela de
+        // resultado.
+        //
+        // `RACE_OVER_TIME` NAO RESOLVE ISTO, e foi a primeira coisa que olhamos:
+        // ele e o prazo dos RETARDATARIOS, e a condicao acima deixa de segurar
+        // exatamente quando o ultimo cruza.
+        //
+        // ZERO MANTEM O COMPORTAMENTO ORIGINAL, de proposito: quem nao configurar
+        // nada continua com o servidor como era.
+        var depois = _configuration.Extra.SegundosDepoisDoUltimo;
+        CurrentSession.OverTimeMilliseconds = depois > 0 ? depois * 1000L : 1;
     }
 
     private void OnClientConnected(ACTcpClient client, EventArgs eventArgs)

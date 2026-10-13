@@ -199,6 +199,23 @@ public class AiBehavior : BackgroundService
         if (_sessionManager.CurrentSession.StartTimeMilliseconds > _sessionManager.ServerTimeMilliseconds)
             return;
 
+        // ─────────────────── MODO CORRIDA PARA AQUI ───────────────────
+        //
+        // Tudo daqui para baixo e a mecanica de TRAFEGO: medir a distancia de
+        // cada IA ao jogador mais proximo, aposentar quem ficou longe e
+        // teleportar de volta a frente de alguem. Numa estrada isso e o que
+        // mantem carros no campo de visao de quem dirige.
+        //
+        // NUMA CORRIDA ISSO DESTROI A PROVA. O carro que abre vantagem some, o
+        // retardatario reaparece colado no lider, e a tabela de voltas vira
+        // ficcao. Em corrida eles nascem uma vez, na largada, e ficam ate o
+        // fim -- `LargarNoGrid` cuida disso.
+        if (_configuration.Extra.AiParams.ModoCorrida)
+        {
+            GarantirGrid();
+            return;
+        }
+
         for (int i = 0; i < _initializedAiStates.Count; i++)
         {
             _aiMinDistanceToPlayer.Add(new KeyValuePair<AiState, float>(_initializedAiStates[i], float.MaxValue));
@@ -353,6 +370,81 @@ public class AiBehavior : BackgroundService
         {
             _initializedAiStates[i].Despawn();
         }
+
+        // Sessao nova, grid novo. O `GarantirGrid` do proximo tique recoloca
+        // todo mundo; aqui so se apaga a marca de que ja houve largada.
+        _largou = false;
+    }
+
+    private bool _largou;
+
+    /// <summary>
+    /// Poe cada IA na sua vaga de largada, uma unica vez por sessao.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ESPACADAS PARA TRAS A PARTIR DA LINHA, e nao nas vagas de verdade: as
+    /// posicoes do grid moram no arquivo da PISTA (os `AC_START_n` do modelo),
+    /// que o servidor nao le -- ele so conhece o tracado da IA. Espacar pelo
+    /// tracado da a mesma coisa que importa aqui: carros em fila, separados, no
+    /// sentido certo, prontos para largar.
+    /// </para>
+    /// <para>
+    /// A DIFERENCA que isso deixa e a largada parada em duas colunas, que nao
+    /// existe. Para ensaio de transmissao e disputa em pista isso nao pesa; se
+    /// um dia pesar, o caminho e o servidor ler os `AC_START_n`.
+    /// </para>
+    /// <para>
+    /// UMA VEZ SO: chamado a cada tique do comportamento, ele precisa saber que
+    /// ja largou -- senao teleportaria todo mundo de volta a largada duas vezes
+    /// por segundo, e a corrida nunca sairia do lugar.
+    /// </para>
+    /// </remarks>
+    private void GarantirGrid()
+    {
+        if (_largou) return;
+
+        var espaco = _configuration.Extra.AiParams.CorridaEspacoNoGridMetros;
+        var pontos = _spline.Points;
+        if (pontos.Length == 0) return;
+
+        // ANDA O TRACADO PARA TRAS SOMANDO DISTANCIA, em vez de dividir o
+        // comprimento pelo numero de pontos: o passo do `fast_lane.ai` e
+        // irregular -- ele e denso na curva e esparso na reta --, e a media
+        // colocaria o grid comprimido justamente onde ele e desenhado, na
+        // reta de largada.
+        //
+        // `PreviousId` quando existe; senao, o anterior pelo indice com a
+        // volta no fim. Um tracado de circuito e fechado, entao a volta
+        // sempre chega em asfalto.
+        var ponto = 0;
+        var vaga = 0;
+        foreach (var entryCar in _entryCarManager.EntryCars)
+        {
+            if (!entryCar.AiControlled) continue;
+
+            var andado = 0f;
+            while (andado < espaco)
+            {
+                var anterior = pontos[ponto].PreviousId;
+                ponto = anterior >= 0 ? anterior : (ponto - 1 + pontos.Length) % pontos.Length;
+                andado += pontos[ponto].Length;
+
+                // GUARDA CONTRA TRACADO QUEBRADO: comprimento zero em todos os
+                // pontos faria este laco girar para sempre e levar o servidor
+                // junto. Uma vaga mal posicionada e um defeito menor.
+                if (andado <= 0f && ponto == 0) break;
+            }
+
+            entryCar.LargarEm(ponto);
+            vaga++;
+        }
+
+        if (vaga > 0)
+        {
+            _largou = true;
+            Log.Information("Modo corrida: {Quantas} IA largaram, a cada {Espaco} m", vaga, espaco);
+        }
     }
 
     private int GetRandomWeighted(int max)
@@ -447,6 +539,24 @@ public class AiBehavior : BackgroundService
         if (aiSlots.Count == 0)
         {
             Log.Debug("AI Slot overbooking update - no AI slots available");
+            return;
+        }
+
+        // ─────────── EM CORRIDA, UM CARRO POR VAGA. SEMPRE. ───────────
+        //
+        // O calculo abaixo e de trafego: ele multiplica carros por jogador e
+        // por densidade, e a mesma vaga do entry_list vira varios veiculos ao
+        // mesmo tempo em pontos diferentes da estrada. Numa corrida isso seria
+        // o mesmo piloto em dois lugares da pista, com uma volta so contando.
+        //
+        // E ELE RODA A CADA CONEXAO: sem este desvio, o primeiro piloto que
+        // entrasse recalcularia a quantidade e desfaria o grid.
+        if (_configuration.Extra.AiParams.ModoCorrida)
+        {
+            foreach (var slot in aiSlots)
+            {
+                slot.SetAiOverbooking(1);
+            }
             return;
         }
             

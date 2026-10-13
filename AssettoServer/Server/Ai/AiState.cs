@@ -50,6 +50,36 @@ public class AiState : IDisposable
     private Vector3 _endTangent;
 
     private float _currentVecLength;
+
+    /// <summary>
+    /// Quando este carro cruzou a linha pela ultima vez, em tempo de servidor.
+    /// </summary>
+    /// <remarks>
+    /// ZERO ATE A PRIMEIRA PASSAGEM, e a primeira nao conta volta: ela comeca
+    /// no grid, no meio do tracado, e o tempo dela seria um pedaco de volta.
+    /// Contar essa daria a todo mundo uma volta de brinde, com tempo absurdo
+    /// como melhor volta da sessao.
+    /// </remarks>
+    private long _inicioDaVoltaMs;
+
+    /// <summary>
+    /// Quanto este carro anda fora da linha de corrida, em metros.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// POSITIVO E PARA A DIREITA. Zero e a propria linha, que e onde toda a IA
+    /// de trafego anda -- e por isso eles andavam em fila indiana, sem
+    /// ultrapassagem possivel: dois carros no mesmo ponto do tracado ocupavam o
+    /// mesmo asfalto.
+    /// </para>
+    /// <para>
+    /// O LIMITE E A PISTA DE VERDADE, ponto a ponto: o `fast_lane.ai` traz
+    /// `SideLeft` e `SideRight`, a distancia da linha ate a borda de cada lado.
+    /// Um numero fixo poria roda na grama onde a pista estreita -- em Guapore
+    /// ha trechos em que 2 m ja e fora.
+    /// </para>
+    /// </remarks>
+    private float _desvioLateral;
     private float _currentVecProgress;
     private long _lastTick;
     private bool _stoppedForObstacle;
@@ -133,7 +163,30 @@ public class AiState : IDisposable
         {
             fastLaneOffset = _configuration.Extra.AiParams.RightLaneOffsetMs;
         }
-        InitialMaxSpeed = _configuration.Extra.AiParams.MaxSpeedMs + fastLaneOffset - (variation / 2) + (float)Random.Shared.NextDouble() * variation;
+        // EM CORRIDA O RITMO E DO PILOTO, E NAO DO SORTEIO.
+        //
+        // No trafego, sortear a cada nascimento e o certo: os carros passam uma
+        // vez e nunca mais, e a variedade e toda a graca. Numa corrida o mesmo
+        // carro reaparece volta apos volta, e um ritmo que muda a cada vez nao
+        // e disputa -- e ruido. Quem narra perde a historia ("este vinha mais
+        // rapido ha tres voltas"), que e justamente o que da enredo a prova.
+        //
+        // A CONTA E A VAGA: espalha o grid do mais lento ao mais rapido de
+        // forma estavel, e o mesmo entry_list da sempre a mesma ordem de
+        // forca. Sem o sorteio, duas subidas do servidor produzem a mesma
+        // corrida -- o que e exatamente o que se quer para comparar um ajuste.
+        if (_configuration.Extra.AiParams.ModoCorrida)
+        {
+            var vagas = Math.Max(1, _entryCarManager.EntryCars.Length - 1);
+            var fracao = EntryCar.SessionId / (float)vagas;
+            var espalhamento = _configuration.Extra.AiParams.CorridaVariacaoDeRitmo;
+            InitialMaxSpeed = _configuration.Extra.AiParams.MaxSpeedMs
+                              * (1f - espalhamento / 2f + fracao * espalhamento);
+        }
+        else
+        {
+            InitialMaxSpeed = _configuration.Extra.AiParams.MaxSpeedMs + fastLaneOffset - (variation / 2) + (float)Random.Shared.NextDouble() * variation;
+        }
         CurrentSpeed = InitialMaxSpeed;
         TargetSpeed = InitialMaxSpeed;
         MaxSpeed = InitialMaxSpeed;
@@ -230,6 +283,28 @@ public class AiState : IDisposable
                 || !_junctionEvaluator.TryNext(nextPointId, out var nextNextPointId))
             {
                 return false;
+            }
+
+            // ───────────── CRUZOU A LINHA DE CHEGADA? ─────────────
+            //
+            // O indice do tracado cresce no sentido da pista e da a volta no
+            // fim, entao o unico ponto em que ele DIMINUI e a passagem pela
+            // linha. Nao ha marcador de chegada no `fast_lane.ai` -- o ponto 0
+            // e onde o autor comecou a gravar, que e a propria linha.
+            //
+            // SO EM CORRIDA e so com um salto para tras PEQUENO: um teleporte
+            // (largada, reposicionamento) tambem anda para tras no indice, e
+            // sem este limite ele contaria uma volta que ninguem deu.
+            if (_configuration.Extra.AiParams.ModoCorrida
+                && nextPointId < CurrentSplinePointId
+                && CurrentSplinePointId > points.Length - 50)
+            {
+                var agora = _sessionManager.ServerTimeMilliseconds;
+                if (_inicioDaVoltaMs > 0)
+                {
+                    EntryCar.VoltaDaIa((uint)(agora - _inicioDaVoltaMs));
+                }
+                _inicioDaVoltaMs = agora;
             }
 
             CurrentSplinePointId = nextPointId;
@@ -332,6 +407,231 @@ public class AiState : IDisposable
         return isAllowedLane;
     }
 
+    /// <summary>
+    /// Decide para que lado da pista este carro anda, e leva ele ate la.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A REGRA E CURTA: atras de alguem mais lento, sai para o lado onde ha
+    /// mais asfalto; livre, volta para a linha de corrida. E o bastante para
+    /// uma ultrapassagem acontecer, porque quem vem mais rapido encontra o
+    /// espaco ao lado em vez da traseira do outro.
+    /// </para>
+    /// <para>
+    /// VOLTA PARA A LINHA QUANDO LIVRE, e isso importa tanto quanto sair dela:
+    /// a linha de corrida e a rapida, e um carro que ficasse para sempre no
+    /// lado seria eternamente lento -- a corrida congelaria na ordem da
+    /// largada.
+    /// </para>
+    /// <para>
+    /// O MOVIMENTO E GRADUAL, limitado em metros por segundo. Saltar de lado
+    /// num quadro poria o carro dentro do outro, e para quem assiste seria um
+    /// teleporte -- nao uma ultrapassagem.
+    /// </para>
+    /// </remarks>
+    private void AtualizarDesvio(float dt)
+    {
+        if (!_configuration.Extra.AiParams.ModoCorrida) return;
+
+        ref readonly var ponto = ref _spline.Points[CurrentSplinePointId];
+
+        // SO QUEM ESTA ALCANCANDO SAI DA LINHA.
+        //
+        // Antes bastava ter alguem perto, e com o grid a 12 m TODOS estavam
+        // perto de alguem o tempo inteiro: os quinze andavam permanentemente
+        // fora da linha, e nunca voltavam. Quem nao tem o que fazer ali
+        // atrapalha, perde tempo e termina na grama.
+        //
+        // A margem de velocidade evita o vaivem de quem anda no mesmo ritmo do
+        // carro da frente: sem ela, meio quilometro por hora de diferenca
+        // bastaria para o carro ficar trocando de linha a prova inteira.
+        float alvo = 0;
+        var alcancando = ClosestAiObstacleDistance >= 0
+                         && ClosestAiObstacleDistance < DistanciaParaTentarPassar
+                         && CurrentSpeed > _velocidadeDoDaFrente + MargemParaTentarMs;
+        if (alcancando)
+        {
+            // O LADO COM MAIS ESPACO, limitado a UMA LARGURA DE CARRO.
+            //
+            // `SideLeft`/`SideRight` NAO sao a borda do asfalto -- medido em
+            // Guapore, a mediana e 6,5 m e o maximo 45,4 m, porque eles contam
+            // escape e patio. Aqui eles servem so para ESCOLHER O LADO e para
+            // encolher o desvio onde a pista aperta; o tamanho vem de um
+            // numero em metros.
+            var espaco = Math.Max(ponto.SideLeft, ponto.SideRight);
+            var desvio = Math.Min(_configuration.Extra.AiParams.CorridaDesvioMetros,
+                                  Math.Max(0f, espaco - FolgaAteABordaMetros));
+            alvo = ponto.SideLeft > ponto.SideRight ? -desvio : desvio;
+        }
+
+        var passo = DesvioMetrosPorSegundo * (dt / 1000.0f);
+        var falta = alvo - _desvioLateral;
+        _desvioLateral += Math.Clamp(falta, -passo, passo);
+    }
+
+    /// <summary>A que distancia do carro da frente se tenta a ultrapassagem.</summary>
+    private const float DistanciaParaTentarPassar = 30f;
+
+    /// <summary>Quao rapido o carro troca de linha, em metros por segundo.</summary>
+    private const float DesvioMetrosPorSegundo = 2.5f;
+
+    /// <summary>
+    /// Quanto mais rapido e preciso ser para tentar passar, em m/s.
+    /// </summary>
+    /// <remarks>
+    /// Cerca de 5 km/h. Abaixo disso nao ha ultrapassagem a fazer, e a
+    /// tentativa so custaria tempo aos dois.
+    /// </remarks>
+    private const float MargemParaTentarMs = 1.5f;
+
+    /// <summary>
+    /// Folga mantida ate o limite que o tracado reporta, em metros.
+    /// </summary>
+    /// <remarks>
+    /// Onde a pista aperta, o desvio encolhe junto. Nao e a borda do asfalto
+    /// -- ver a nota em `AtualizarDesvio` --, mas serve de teto onde o valor e
+    /// pequeno, que e justamente onde nao ha para onde ir.
+    /// </remarks>
+    private const float FolgaAteABordaMetros = 1.0f;
+
+    /// <summary>
+    /// A velocidade do carro a frente, guardada na busca por obstaculo.
+    /// </summary>
+    /// <remarks>
+    /// `float.MaxValue` quando nao ha ninguem: assim a comparacao "sou mais
+    /// rapido que ele" da falso sozinha, sem precisar de um teste a parte.
+    /// </remarks>
+    private float _velocidadeDoDaFrente = float.MaxValue;
+
+    /// <summary>
+    /// Carro ao lado nao e obstaculo.
+    /// </summary>
+    /// <remarks>
+    /// SEM ISTO O DESVIO NAO SERVE DE NADA: a busca por obstaculo olha so para
+    /// a FRENTE no tracado, sem saber de posicao lateral -- entao o
+    /// ultrapassante, ja emparelhado, continuaria freando atras de quem esta ao
+    /// seu lado, e a ultrapassagem nunca se completaria.
+    ///
+    /// A folga e de uma largura de carro mais uma margem: encostado demais, o
+    /// toque seria o resultado.
+    /// </remarks>
+    private bool EstaAoLado(AiState outro) =>
+        _configuration.Extra.AiParams.ModoCorrida
+        && Math.Abs(_desvioLateral - outro._desvioLateral) > LarguraLivreMetros;
+
+    private const float LarguraLivreMetros = 2.2f;
+
+    /// <summary>
+    /// A marcha e o conta-giros deste carro, a partir da velocidade.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// POR QUE E CALCULADO: a IA nao roda fisica -- nao ha motor nem caixa. O
+    /// que o cliente ouve vem do numero que o servidor poe no pacote, e o
+    /// upstream punha uma rampa linear entre 800 e 3000 rpm com a marcha presa
+    /// na segunda. Resultado: um zumbido continuo ao lado de um carro de
+    /// verdade que sobe e cai de giro a cada troca.
+    /// </para>
+    /// <para>
+    /// A CONTA E A DE SEMPRE: a roda gira `velocidade / circunferencia` voltas
+    /// por segundo, e o motor gira isso vezes a relacao da marcha vezes a
+    /// final. Com as relacoes reais do carro, as trocas caem onde caem de
+    /// verdade -- nao num ponto escolhido a dedo.
+    /// </para>
+    /// <para>
+    /// SOBE DE MARCHA AO BATER NO LIMITADOR, que e o que um piloto faz. Anda-se
+    /// da primeira para cima e fica-se na primeira que segura o giro abaixo do
+    /// corte; nao achando nenhuma, usa-se a mais longa.
+    /// </para>
+    /// <para>
+    /// SEM RELACOES CONFIGURADAS, nada muda: volta a rampa antiga. Inventar
+    /// uma caixa daria trocas nos lugares errados, que soa pior do que nao
+    /// trocar.
+    /// </para>
+    /// </remarks>
+    private (byte Marcha, ushort Giro) MarchaEGiro()
+    {
+        var relacoes = EntryCar.AiGearRatios;
+        if (relacoes == null || relacoes.Length == 0 || EntryCar.TyreDiameterMeters <= 0)
+        {
+            var rampa = MathUtils.Lerp(EntryCar.AiIdleEngineRpm, EntryCar.AiMaxEngineRpm,
+                CurrentSpeed / _configuration.Extra.AiParams.MaxSpeedMs);
+            return (GearNeutraMaisUm, (ushort)rampa);
+        }
+
+        var voltasDaRodaPorMinuto = CurrentSpeed / (MathF.PI * EntryCar.TyreDiameterMeters) * 60f;
+        float GiroEm(int marcha) => voltasDaRodaPorMinuto * relacoes[marcha] * EntryCar.AiFinalRatio;
+
+        _marchaAtual = Math.Clamp(_marchaAtual, 0, relacoes.Length - 1);
+
+        var agora = _sessionManager.ServerTimeMilliseconds;
+        if (agora - _ultimaTrocaMs >= TempoMinimoEntreTrocasMs)
+        {
+            var subir = EntryCar.AiMaxEngineRpm * FracaoParaSubir;
+            var descer = EntryCar.AiMaxEngineRpm * FracaoParaDescer;
+            var giroAgora = GiroEm(_marchaAtual);
+
+            if (giroAgora > subir && _marchaAtual < relacoes.Length - 1)
+            {
+                _marchaAtual++;
+                _ultimaTrocaMs = agora;
+            }
+            else if (giroAgora < descer && _marchaAtual > 0)
+            {
+                _marchaAtual--;
+                _ultimaTrocaMs = agora;
+            }
+        }
+
+        // PARADO NAO E MOTOR DESLIGADO: abaixo da marcha lenta o giro fica na
+        // marcha lenta, senao o carro na largada apareceria com o motor morto.
+        var rpm = Math.Max(GiroEm(_marchaAtual), EntryCar.AiIdleEngineRpm);
+
+        // `Gear` do AC conta a partir da re: 0 e a re, 1 e o ponto morto, e a
+        // primeira marcha e 2. O upstream mandava 2 fixo -- que e exatamente a
+        // primeira, para sempre.
+        return ((byte)(_marchaAtual + GearNeutraMaisUm), (ushort)Math.Min(rpm, EntryCar.AiMaxEngineRpm));
+    }
+
+    /// <summary>A marcha engatada agora, 0 para a primeira.</summary>
+    /// <remarks>
+    /// E ESTADO, E NAO CONTA. Antes a marcha saia direto da velocidade, a cada
+    /// quadro: perto de um ponto de troca, a oscilacao normal de quem freia e
+    /// acelera fazia o carro subir e descer sem parar -- dezenas de trocas numa
+    /// curva so. Guardar a marcha e o que permite exigir uma condicao para
+    /// SAIR dela.
+    /// </remarks>
+    private int _marchaAtual;
+
+    private long _ultimaTrocaMs;
+
+    /// <summary>Sobe de marcha a esta fracao do limitador.</summary>
+    private const float FracaoParaSubir = 0.97f;
+
+    /// <summary>
+    /// Desce de marcha so abaixo desta fracao do limitador.
+    /// </summary>
+    /// <remarks>
+    /// MUITO MAIS BAIXO QUE O DE SUBIR, e e isto que impede o vaivem: as
+    /// relacoes do Clio sao ~19% de uma para a outra, entao reduzir a 55% do
+    /// corte leva o giro para ~65% -- longe do ponto de subir. Com os dois
+    /// limites proximos, o carro trocaria de volta no quadro seguinte.
+    /// </remarks>
+    private const float FracaoParaDescer = 0.55f;
+
+    /// <summary>
+    /// Tempo minimo entre duas trocas.
+    /// </summary>
+    /// <remarks>
+    /// Mesmo com histerese, uma freada forte atravessa varias marchas de uma
+    /// vez. Escalonar no tempo faz isso soar como um piloto reduzindo, e nao
+    /// como a caixa inteira caindo num quadro.
+    /// </remarks>
+    private const long TempoMinimoEntreTrocasMs = 250;
+
+    /// <summary>A primeira marcha no jogo. 0 e a re e 1 e o ponto morto.</summary>
+    private const byte GearNeutraMaisUm = 2;
+
     private (AiState? ClosestAiState, float ClosestAiStateDistance, float MaxSpeed) SplineLookahead()
     {
         var points = _spline.Points;
@@ -371,6 +671,12 @@ public class AiState : IDisposable
             if (closestAiState == null)
             {
                 var slowest = _spline.SlowestAiStates[pointId];
+
+                if (slowest != null && EstaAoLado(slowest))
+                {
+                    // Emparelhado, nao atrapalha: segue procurando mais a frente.
+                    slowest = null;
+                }
 
                 if (slowest != null)
                 {
@@ -471,6 +777,7 @@ public class AiState : IDisposable
         var playerObstacle = FindClosestPlayerObstacle();
 
         ClosestAiObstacleDistance = splineLookahead.ClosestAiState != null ? splineLookahead.ClosestAiStateDistance : -1;
+        _velocidadeDoDaFrente = splineLookahead.ClosestAiState?.CurrentSpeed ?? float.MaxValue;
 
         if (playerObstacle.distance < _minObstacleDistance || splineLookahead.ClosestAiStateDistance < _minObstacleDistance)
         {
@@ -601,6 +908,8 @@ public class AiState : IDisposable
             }
         }
 
+        AtualizarDesvio(dt);
+
         float moveMeters = (dt / 1000.0f) * CurrentSpeed;
         if (!Move(_currentVecProgress + moveMeters) || !_junctionEvaluator.TryNext(CurrentSplinePointId, out var nextPoint))
         {
@@ -625,8 +934,25 @@ public class AiState : IDisposable
         float tyreAngularSpeed = GetTyreAngularSpeed(CurrentSpeed, EntryCar.TyreDiameterMeters);
         byte encodedTyreAngularSpeed =  (byte) (Math.Clamp(MathF.Round(MathF.Log10(tyreAngularSpeed + 1.0f) * 20.0f) * Math.Sign(tyreAngularSpeed), -100.0f, 154.0f) + 100.0f);
 
+        // SAI DA LINHA DE CORRIDA, dentro do asfalto que existe naquele ponto.
+        //
+        // A perpendicular e no plano do chao: girar o vetor de avanco 90 graus
+        // em XZ. Usar o produto vetorial com o vertical daria o mesmo, e esta
+        // forma evita normalizar duas vezes a cada quadro, sessenta vezes por
+        // segundo e por carro.
+        var posicao = smoothPos.Position;
+        if (_desvioLateral != 0)
+        {
+            var frente = smoothPos.Tangent;
+            var comprimento = new Vector2(frente.X, frente.Z).Length();
+            if (comprimento > 0.0001f)
+            {
+                posicao += new Vector3(frente.Z, 0, -frente.X) / comprimento * _desvioLateral;
+            }
+        }
+
         Status.Timestamp = _sessionManager.ServerTimeMilliseconds;
-        Status.Position = smoothPos.Position with { Y = smoothPos.Position.Y + EntryCar.AiSplineHeightOffsetMeters };
+        Status.Position = posicao with { Y = posicao.Y + EntryCar.AiSplineHeightOffsetMeters };
         Status.Rotation = rotation;
         Status.Velocity = smoothPos.Tangent * CurrentSpeed;
         Status.SteerAngle = 127;
@@ -635,14 +961,18 @@ public class AiState : IDisposable
         Status.TyreAngularSpeed[1] = encodedTyreAngularSpeed;
         Status.TyreAngularSpeed[2] = encodedTyreAngularSpeed;
         Status.TyreAngularSpeed[3] = encodedTyreAngularSpeed;
-        Status.EngineRpm = (ushort)MathUtils.Lerp(EntryCar.AiIdleEngineRpm, EntryCar.AiMaxEngineRpm, CurrentSpeed / _configuration.Extra.AiParams.MaxSpeedMs);
+        var (marcha, giro) = MarchaEGiro();
+        Status.Gear = marcha;
+        Status.EngineRpm = giro;
         Status.StatusFlag = GetLights(_configuration.Extra.AiParams.EnableDaytimeLights, _weatherManager.CurrentSunPosition, _randomTwilight)
                             | (_sessionManager.ServerTimeMilliseconds < _stoppedForCollisionUntil || CurrentSpeed < 20 / 3.6f ? CarStatusFlags.HazardsOn : 0)
                             | (CurrentSpeed == 0 || Acceleration < 0 ? CarStatusFlags.BrakeLightsOn : 0)
                             | (_stoppedForObstacle && _sessionManager.ServerTimeMilliseconds > _obstacleHonkStart && _sessionManager.ServerTimeMilliseconds < _obstacleHonkEnd ? CarStatusFlags.Horn : 0)
                             | GetWiperSpeed(_weatherManager.CurrentWeather.RainIntensity)
                             | _indicator;
-        Status.Gear = 2;
+        // A MARCHA JA FOI DECIDIDA acima, em `MarchaEGiro`. Aqui havia um
+        // `Status.Gear = 2` fixo que apagava a conta -- e, por ser a ULTIMA
+        // linha do metodo, apagava calado.
     }
         
     private static float GetTyreAngularSpeed(float speed, float wheelDiameter)

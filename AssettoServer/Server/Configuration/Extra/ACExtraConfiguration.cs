@@ -24,6 +24,10 @@ public class ACExtraConfiguration
     public int MandatoryClientSecurityLevel { get; internal set; }
     [YamlMember(Description = "Force headlights on for all cars")]
     public bool ForceLights { get; set; }
+    [YamlMember(Description = "Liga: put a driver in the slot reserved for his GUID even if he asked for another car, like ACC does. Off by default: it changes behaviour at the connection door, where a surprise locks everyone out of a race")]
+    public bool VagaDoGuidVenceOCarroPedido { get; set; } = false;
+    [YamlMember(Description = "Liga: balance of performance per CAR, applied when a slot is taken. Works on open slots too, unlike the entry_list, because it keys on the car model and not on the driver")]
+    public List<BopDeCarroConfiguration> BopDaLiga { get; set; } = new();
     [YamlMember(Description = "Enable usage of /resetcar to teleport the player to the closest spline point. Requires CSP v0.2.8 (3424) or later")]
     public bool EnableCarReset { get; set; } = false;
     [YamlMember(Description = "Enable vanilla server voting for: Session skip; Session restart")]
@@ -74,6 +78,12 @@ public class ACExtraConfiguration
     public bool DebugClientMessages { get; set; } = false;
     [YamlMember(Description = "Enable CSP custom position updates. This is an improved version of batched position updates, reducing network traffic even further. Requires CSP 0.1.77+")]
     public bool EnableCustomUpdate { get; set; } = true;
+    [YamlMember(Description = "Segundos de pista APOS o ultimo carro cruzar a linha, antes de a corrida encerrar. "
+        + "O AC leva todo mundo para o box no instante em que a sessao acaba, e com zero isso acontece junto com a "
+        + "bandeirada do ultimo: nao ha volta de desaceleracao, nem vencedor comemorando -- a transmissao corta seco "
+        + "para a tela de resultado. Nao confundir com RACE_OVER_TIME, que e o tempo que os RETARDATARIOS ainda tem "
+        + "para terminar: aquele para de valer justamente quando o ultimo cruza.")]
+    public int SegundosDepoisDoUltimo { get; set; } = 0;
     [YamlMember(Description = "Maximum time a player can spend on the loading screen before being disconnected")]
     public int PlayerLoadingTimeoutMinutes { get; set; } = 10;
     [YamlMember(Description = "Maximum time the server will wait for a checksum response before disconnecting the player")]
@@ -231,4 +241,21 @@ public class ACExtraConfiguration
             ]
         }
     };
+}
+
+/// <summary>
+/// Uma linha do BOP da liga: um carro, o lastro e o restritor dele.
+/// </summary>
+/// <remarks>
+/// POR CARRO E NAO POR VAGA -- ver <see cref="AssettoServer.Server.BopDaLiga"/>.
+/// O Pit Engineer escreve esta lista a partir do cadastro da liga.
+/// </remarks>
+public class BopDeCarroConfiguration
+{
+    [YamlMember(Description = "Car folder, as in content/cars")]
+    public string Carro { get; set; } = "";
+    [YamlMember(Description = "Ballast in kg added to this car")]
+    public float LastroKg { get; set; }
+    [YamlMember(Description = "Air restrictor, 0-400")]
+    public int Restritor { get; set; }
 }

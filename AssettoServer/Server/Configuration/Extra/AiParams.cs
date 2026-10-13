@@ -123,6 +123,54 @@ public partial class AiParams : ObservableObject
     [YamlMember(Description = "Override some settings for specific car models")]
     public List<CarSpecificOverrides> CarSpecificOverrides { get; init; } = [];
 
+    // ───────────────────────── MODO CORRIDA ─────────────────────────
+    //
+    // A IA daqui nasceu para TRAFEGO: ela e teleportada ao redor dos jogadores,
+    // some quando ninguem esta perto e nao conta volta -- numa estrada aberta
+    // isso e exatamente o certo, porque o que importa e haver carros no campo
+    // de visao de quem dirige.
+    //
+    // Numa pista isso nao serve. Um carro que desaparece quando o lider abre
+    // vantagem nao esta correndo; esta decorando a paisagem. O modo corrida
+    // troca as tres regras: nasce uma vez, fica, e a volta dele conta.
+    //
+    // DESLIGADO POR PADRAO, e de proposito -- o upstream e um servidor de
+    // trafego e tem que continuar se comportando como um.
+
+    [YamlMember(Description = "Race mode: AI cars stay on track, start from the grid and count laps (instead of traffic behaviour)")]
+    public bool ModoCorrida { get; set; } = false;
+
+    [YamlMember(Description = "Race mode: spacing between AI cars on the starting grid, in metres")]
+    public float CorridaEspacoNoGridMetros { get; set; } = 12.0f;
+
+    // CADA PILOTO COM O SEU RITMO, e o MESMO ritmo a cada volta.
+    //
+    // Sem isto os quinze andam no mesmo passo e a corrida vira comboio: ninguem
+    // alcanca ninguem, e nao ha o que narrar. Com variacao, abrem-se brigas
+    // sozinhas ao longo da prova.
+    //
+    // POR VAGA, E NAO SORTEADO A CADA VOLTA: um piloto que oscila de ritmo nao
+    // e disputa, e ruido -- e quem narra perde a historia ("este vinha mais
+    // rapido a tres voltas") que e justamente o que faz a corrida ter enredo.
+    [YamlMember(Description = "Race mode: pace spread between the fastest and slowest AI, as a fraction (0.04 = 4%)")]
+    public float CorridaVariacaoDeRitmo { get; set; } = 0.04f;
+
+    // O QUANTO ELES SAEM DA LINHA DE CORRIDA PARA PASSAR, EM METROS.
+    //
+    // EM METROS, E NAO EM FRACAO DA PISTA -- e isto foi medido, nao suposto.
+    // A primeira versao usava `SideLeft`/`SideRight` do `fast_lane.ai` como
+    // orcamento, por achar que fossem a distancia ate a borda do asfalto. Nao
+    // sao: em Guapore a mediana e 6,5 m mas o MAXIMO e 45,4 m -- eles medem
+    // ate um limite externo qualquer, incluindo escape, grama e patio. Com
+    // 55% disso, o carro ia 25 m para fora na primeira curva e fazia a volta
+    // inteira na grama.
+    //
+    // UMA LARGURA DE CARRO BASTA para ficar ao lado de alguem, e e tudo o que
+    // uma ultrapassagem precisa. Mais do que isso nao ajuda a passar -- so
+    // afasta da linha rapida.
+    [YamlMember(Description = "Race mode: how far AI move off the racing line to overtake, in metres")]
+    public float CorridaDesvioMetros { get; set; } = 1.8f;
+
     [YamlIgnore] public float PlayerRadiusSquared => PlayerRadiusMeters * PlayerRadiusMeters;
     [YamlIgnore] public float PlayerAfkTimeoutMilliseconds => PlayerAfkTimeoutSeconds * 1000;
     [YamlIgnore] public float MaxPlayerDistanceToAiSplineSquared => MaxPlayerDistanceToAiSplineMeters * MaxPlayerDistanceToAiSplineMeters;
