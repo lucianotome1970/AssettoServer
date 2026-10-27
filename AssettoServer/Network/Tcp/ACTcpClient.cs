@@ -425,6 +425,12 @@ public class ACTcpClient : IClient
                         SendPacket(new AuthFailedResponse("Driver name cannot be empty."));
                     else if (!_cspFeatureManager.ValidateHandshake(cspFeatures))
                         SendPacket(new AuthFailedResponse("Missing CSP features. Please update CSP and/or Content Manager."));
+                    else if (!CspVersionAceita(cspFeatures, out var cspVersionAnunciada))
+                        SendPacket(new AuthFailedResponse(
+                            $"This server requires Custom Shaders Patch {_configuration.CSPTrackOptions.MinimumCSPVersion} or newer. "
+                            + (cspVersionAnunciada.HasValue
+                                ? $"Yours reports {cspVersionAnunciada.Value}."
+                                : "Yours did not report a version.")));
                     else if ((response = await _openSlotFilter.ShouldAcceptConnectionAsync(this, handshakeRequest)).HasValue)
                         SendPacket(response.Value);
                     else if (!await _entryCarManager.TrySecureSlotAsync(this, handshakeRequest))
@@ -618,6 +624,47 @@ public class ACTcpClient : IClient
         {
             await DisconnectAsync();
         }
+    }
+
+    /// <summary>
+    /// A versao do CSP que o cliente anunciou serve? O numero lido sai em
+    /// <paramref name="versao"/> mesmo quando a trava esta desligada.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A TRAVA COBRADA AQUI, E NAO NO NOME DA PISTA. Ver
+    /// <see cref="CSPTrackOptions.CheckOnHandshake"/> para o porque: o cliente
+    /// que nao desmonta "csp/2651/../pista" nunca chega a conectar, e e barrado
+    /// por um erro que o manda procurar uma pista que ele ja tem.
+    /// </para>
+    /// <para>
+    /// DESLIGADA, NAO RECUSA NINGUEM: quem cobra continua sendo o prefixo, e
+    /// quem chegou ate aqui ja passou por ele.
+    /// </para>
+    /// <para>
+    /// SEM NUMERO E RECUSA. Nao anunciar versao e o que faz um cliente SEM CSP,
+    /// que e exatamente quem a trava existe para barrar. O registro sai antes
+    /// da decisao porque a linha 0.3.0 e nova aqui, e o formato do anuncio dela
+    /// so se descobre medindo.
+    /// </para>
+    /// </remarks>
+    private bool CspVersionAceita(IReadOnlyList<string> cspFeatures, out int? versao)
+    {
+        // A VERSAO E O ULTIMO ITEM DA LISTA DE RECURSOS -- a mesma leitura que
+        // o fim do handshake faz para guardar em `CSPVersion`.
+        versao = int.TryParse(cspFeatures.LastOrDefault(""), out var lida) ? lida : null;
+
+        if (!_configuration.Extra.CheckCSPVersionOnHandshake) return true;
+        if (_configuration.CSPTrackOptions.MinimumCSPVersion is not { } minimo) return true;
+
+        var serve = versao.HasValue && versao.Value >= minimo;
+        if (!serve)
+        {
+            Logger.Information(
+                "{ClientName} ({ClientSteamId}) refused: CSP version {Version}, minimum is {Minimum}",
+                Name, Guid, versao?.ToString() ?? "not announced", minimo);
+        }
+        return serve;
     }
 
     private void OnClientEvent(PacketReader reader)

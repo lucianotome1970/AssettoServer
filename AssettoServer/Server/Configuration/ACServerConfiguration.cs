@@ -77,22 +77,27 @@ public partial class ACServerConfiguration
             ACExtraConfiguration.ReferenceConfiguration, 
             $"AssettoServer {ThisAssembly.AssemblyInformationalVersion}");
         
-        var parsedTrackOptions = CSPTrackOptions = CSPTrackOptions.Parse(Server.Track);
-        if (Extra.MinimumCSPVersion.HasValue
-            && (!CSPTrackOptions.MinimumCSPVersion.HasValue || Extra.MinimumCSPVersion.Value > CSPTrackOptions.MinimumCSPVersion.Value))
+        // A VERSAO MINIMA SAI DA MAIOR DAS DUAS FONTES: o que o `extra_cfg`
+        // pede e o que ja veio escrito no nome da pista. Um caminho so, e nao
+        // dois, porque a bandeira do handshake vale igual para os dois casos --
+        // ver `CSPTrackOptions.CheckOnHandshake`.
+        var parsedTrackOptions = CSPTrackOptions.Parse(Server.Track);
+        var minimumCspVersion = Extra.MinimumCSPVersion.HasValue
+            && (!parsedTrackOptions.MinimumCSPVersion.HasValue
+                || Extra.MinimumCSPVersion.Value > parsedTrackOptions.MinimumCSPVersion.Value)
+                ? Extra.MinimumCSPVersion
+                : parsedTrackOptions.MinimumCSPVersion;
+
+        CSPTrackOptions = new CSPTrackOptions
         {
-            CSPTrackOptions = new CSPTrackOptions
-            {
-                Track = parsedTrackOptions.Track,
-                Flags = parsedTrackOptions.Flags,
-                MinimumCSPVersion = Extra.MinimumCSPVersion
-            };
-            Server.Track = CSPTrackOptions.ToString();
-        }
-        else
-        {
-            CSPTrackOptions = parsedTrackOptions;
-        }
+            Track = parsedTrackOptions.Track,
+            Flags = parsedTrackOptions.Flags,
+            MinimumCSPVersion = minimumCspVersion,
+            CheckOnHandshake = Extra.CheckCSPVersionOnHandshake
+        };
+        // SEMPRE REESCRITO, e nao so quando a versao muda: com a cobranca no
+        // handshake o nome tem que PERDER o prefixo que ja estivesse nele.
+        Server.Track = CSPTrackOptions.ToString();
 
         if (CSPTrackOptions.MinimumCSPVersion.HasValue)
         {

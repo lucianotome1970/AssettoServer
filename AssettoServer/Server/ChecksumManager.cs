@@ -62,7 +62,11 @@ public class ChecksumManager
     private void CalculateTrackChecksums(string track, string trackConfig)
     {
         var dict = new Dictionary<string, byte[]>();
-        var surfaceFix = _configuration.CSPTrackOptions.MinimumCSPVersion.HasValue;
+        // O CONSERTO SEGUE O PREFIXO, E NAO O NUMERO. Ele existe para imitar o
+        // cliente em modo de pista estendida; sem prefixo o cliente nao esta
+        // nesse modo, e imita-lo faz o servidor recusar um arquivo identico ao
+        // dele. Ver `CSPTrackOptions.VersionInTrackName`.
+        var surfaceFix = _configuration.CSPTrackOptions.VersionInTrackName;
         
         AddChecksum(dict, "system/data/surfaces.ini");
 

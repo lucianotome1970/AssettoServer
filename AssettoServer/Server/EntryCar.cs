@@ -147,11 +147,43 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
         AiInit();
     }
 
+    /// <summary>
+    /// Quantos acionamentos de push-to-pass esta vaga comeca a sessao tendo.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ERA UM 15 CRAVADO, em dois lugares. A cota agora vem da ETAPA, pelo
+    /// <see cref="PushDaLigaConfiguration"/> do `extra_cfg.yml` do preset, que
+    /// e o mesmo caminho do BOP: o Pit Engineer escreve, o servidor aplica.
+    /// O padrao continua 15, entao servidor que nao configure nada nao muda de
+    /// comportamento.
+    /// </para>
+    /// <para>
+    /// O EXTRA DE ESTREANTE depende de haver alguem na vaga: fora de sessao o
+    /// <see cref="Client"/> e nulo e so a cota geral se aplica. Isso nao e
+    /// perda -- quando o piloto entra, o <c>Reset</c> roda de novo com o
+    /// cliente ja no lugar.
+    /// </para>
+    /// </remarks>
+    private short ContarP2P()
+    {
+        if (_configuration.Extra.EnableUnlimitedP2P) return 99;
+
+        var push = _configuration.Extra.PushDaLiga;
+        var total = push.Acionamentos;
+        var guid = Client?.Guid ?? 0;
+        if (push.ExtraDeEstreante > 0 && guid != 0 && push.Estreantes.Contains(guid))
+        {
+            total += push.ExtraDeEstreante;
+        }
+        return total < 0 ? (short)0 : total;
+    }
+
     private void OnSessionChanged(SessionManager sender, SessionChangedEventArgs args)
     {
         Status = new CarStatus
         {
-            P2PCount = (short)(_configuration.Extra.EnableUnlimitedP2P ? 99 : 15),
+            P2PCount = ContarP2P(),
             MandatoryPit = _configuration.Server.PitWindowStart < _configuration.Server.PitWindowEnd,
         };
         
@@ -188,7 +220,7 @@ public partial class EntryCar : IEntryCar<ACTcpClient>
         ForceLights = false;
         Status = new CarStatus
         {
-            P2PCount = (short)(_configuration.Extra.EnableUnlimitedP2P ? 99 : 15),
+            P2PCount = ContarP2P(),
             MandatoryPit = _configuration.Server.PitWindowStart < _configuration.Server.PitWindowEnd,
         };
         TargetCar = null;

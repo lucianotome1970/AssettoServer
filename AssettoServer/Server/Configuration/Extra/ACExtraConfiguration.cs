@@ -14,6 +14,8 @@ public class ACExtraConfiguration
 {
     [YamlMember(Description = "Override minimum CSP version required to join this server. Leave this empty to not require CSP.")]
     public uint? MinimumCSPVersion { get; init; } = CSPVersion.V0_2_0;
+    [YamlMember(Description = "Check MinimumCSPVersion during the handshake instead of embedding it in the track name. Lets clients that do not understand the csp/<version>/../<track> prefix join, at the cost of the pre-join warning in Content Manager.", DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
+    public bool CheckCSPVersionOnHandshake { get; init; } = false;
     [YamlMember(Description = "Enable Steam ticket validation. Requires CSP 0.1.75+ and a recent version of Content Manager")]
     public bool UseSteamAuth { get; init; } = true;
     [YamlMember(Description = "Enable generation of Guid from name instead of SteamID. Required for ACPro", DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
@@ -28,6 +30,8 @@ public class ACExtraConfiguration
     public bool VagaDoGuidVenceOCarroPedido { get; set; } = false;
     [YamlMember(Description = "Liga: balance of performance per CAR, applied when a slot is taken. Works on open slots too, unlike the entry_list, because it keys on the car model and not on the driver")]
     public List<BopDeCarroConfiguration> BopDaLiga { get; set; } = new();
+    [YamlMember(Description = "Liga: how many Push-to-Pass activations each driver gets this round. Only used when EnableUnlimitedP2P is off")]
+    public PushDaLigaConfiguration PushDaLiga { get; set; } = new();
     [YamlMember(Description = "Enable usage of /resetcar to teleport the player to the closest spline point. Requires CSP v0.2.8 (3424) or later")]
     public bool EnableCarReset { get; set; } = false;
     [YamlMember(Description = "Enable vanilla server voting for: Session skip; Session restart")]
@@ -258,4 +262,49 @@ public class BopDeCarroConfiguration
     public float LastroKg { get; set; }
     [YamlMember(Description = "Air restrictor, 0-400")]
     public int Restritor { get; set; }
+}
+
+/// <summary>
+/// Quantos acionamentos de push-to-pass cada piloto tem NESTA ETAPA.
+/// </summary>
+/// <remarks>
+/// <para>
+/// POR QUE NO SERVIDOR E NAO NO CARRO. O `[PUSH_TO_PASS]` do `engine.ini`
+/// tambem tem uma cota, mas ela mora no `data.acd`, que e arquivo do CLIENTE:
+/// qualquer piloto edita o seu e se da quantos quiser. Online quem manda e o
+/// `CarStatus.P2PCount` daqui, e o cliente avisa cada acionamento pelo pacote
+/// `P2PUpdateRequest` -- a contabilidade ja era do servidor, faltava so a
+/// ORIGEM DO NUMERO, que estava cravada como 15 no `EntryCar`.
+/// </para>
+///
+/// <para>
+/// A REGRA E A DA CATEGORIA, e nao a do Assetto Corsa. O regulamento
+/// desportivo 2026 da Stock Car Pro Series manda a promotora informar, POR
+/// ETAPA, quantos acionamentos cada piloto tem, e o artigo 19.3.1 diz que
+/// TODOS recebem a mesma quantidade -- 27 em Cascavel 2025, 36 na 2a etapa,
+/// 44 na abertura de 2024, sempre com um extra so para estreantes. O
+/// `ACTIVATION_BASE`/`ACTIVATION_POS` do `engine.ini`, que da mais push a quem
+/// larga atras, e mecanica generica do jogo e NAO existe no regulamento.
+/// </para>
+///
+/// <para>
+/// O EXTRA VAI POR GUID porque a vaga nao tem onde marcar estreante: o
+/// `EntryCar` so traz equipe, lastro, restritor e os GUIDs permitidos.
+/// </para>
+/// </remarks>
+public class PushDaLigaConfiguration
+{
+    /// <summary>
+    /// Acionamentos para TODOS. O padrao 15 e o numero que estava cravado no
+    /// codigo, para que um servidor que nao configure nada se comporte
+    /// exatamente como antes.
+    /// </summary>
+    [YamlMember(Description = "Activations every driver gets this round, same for all (art. 19.3.1). 15 keeps the old hardcoded behaviour")]
+    public short Acionamentos { get; set; } = 15;
+
+    [YamlMember(Description = "Extra activations for rookies, on top of Acionamentos. 0 disables it")]
+    public short ExtraDeEstreante { get; set; } = 0;
+
+    [YamlMember(Description = "SteamIDs that count as rookies for ExtraDeEstreante")]
+    public List<ulong> Estreantes { get; set; } = new();
 }
